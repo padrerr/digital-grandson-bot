@@ -1,0 +1,35 @@
+# Секреты
+.env
+.env.gigachat
+
+# База данных
+data/
+backups/
+*.db
+
+# Виртуальные окружения
+.venv/
+.venv_proxy/
+venv/
+env/
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Сертификаты
+certs/
+
+# Логи
+*.log
+
+# Системное
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Личное
+test_gigachat.py

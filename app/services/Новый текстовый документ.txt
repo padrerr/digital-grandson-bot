@@ -1,0 +1,70 @@
+import asyncio
+import logging
+from app.config import settings
+from app.services.ai_summary import _get_client  # Используем уже готовый клиент
+
+log = logging.getLogger(__name__)
+
+# Описание функции, которую должна вызвать модель
+FUNCTION_SCHEMA = {
+    "name": "create_schedule",
+    "description": "Создает список задач для распорядка дня на основе медицинской выписки",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Название задачи, например 'Приём таблеток' или 'Замер давления'"},
+                        "hour": {"type": "integer", "description": "Час в 24-часовом формате (0-23)"},
+                        "minute": {"type": "integer", "description": "Минуты (0-59)"},
+                        "measure_kind": {
+                            "type": "string",
+                            "enum": ["pressure", "sugar", "weight", "pulse"],
+                            "description": "Тип замера, если задача связана с измерением. Иначе null."
+                        }
+                    },
+                    "required": ["title", "hour", "minute"]
+                }
+            }
+        },
+        "required": ["items"]
+    }
+}
+
+async def generate_schedule_from_prescription(text: str = None, image_bytes: bytes = None) -> list[dict] | None:
+    """Анализирует выписку и возвращает список задач."""
+    client = _get_client()
+    if client is None:
+        return None
+
+    # Формируем сообщение для модели
+    messages = [{"role": "user", "content": "Проанализируй эту медицинскую выписку и составь распорядок дня."}]
+    
+    if text:
+        messages[0]["content"] += f"\n\nТекст выписки:\n{text}"
+    # Для изображений потребуется загрузить файл и передать его ID (см. документацию)
+
+    try:
+        loop = asyncio.get_event_loop()
+        # Вызываем модель с нашей функцией
+        resp = await loop.run_in_executor(
+            None,
+            lambda: client.chat.create(
+                messages=messages,
+                functions=[FUNCTION_SCHEMA],
+                function_call="auto"  # Модель сама решит, вызывать ли функцию
+            )
+        )
+        
+        # Проверяем, вызвала ли модель нашу функцию
+        if resp.choices[0].message.function_call:
+            import json
+            args = json.loads(resp.choices[0].message.function_call.arguments)
+            return args.get("items", [])
+        return None
+    except Exception as e:
+        log.warning("Prescription analysis failed: %s", e)
+        return None
