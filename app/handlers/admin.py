@@ -1,21 +1,14 @@
 """
 Админ-панель.
-
-Содержит:
-  • /admin — открыть панель
-  • сводку, списки семей и близких
-  • список заявок и ответ на них
 """
 import logging
-from datetime import date
+from datetime import datetime, date
 
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
-from app.services.backup import list_backups
-from app.services.monitor import last_heartbeat
 
 from app.config import settings
 from app.db import (
@@ -27,6 +20,8 @@ from app.db import (
     admin_stats,
 )
 from app.keyboards import kb_admin, kb_admin_help_list, kb_admin_help_detail
+from app.services.backup import list_backups
+from app.services.monitor import last_heartbeat
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -46,12 +41,28 @@ def is_admin(tg_id: int, user) -> bool:
 # /admin
 # ============================================================
 
+@router.message(Command("admin"))
+async def admin_panel(msg: Message):
+    tg = msg.from_user.id
+    user = await get_user_by_tg(tg)
+    if not is_admin(tg, user):
         await msg.answer(
             "Нет доступа.\n"
             "Ваш ID: " + str(tg) + "\n"
             "ADMIN_IDS: " + str(settings.admin_ids)
         )
         return
+
+    # если tg в ADMIN_IDS, а в базе флаг не стоит — починим
+    if user and tg in settings.admin_ids and not user.is_admin:
+        async with Session() as s:
+            u = await s.get(User, user.id)
+            if u:
+                u.is_admin = True
+                await s.commit()
+
+    await msg.answer("Админ-панель:", reply_markup=kb_admin())
+
 
 @router.callback_query(F.data == "adm_back")
 async def admin_back(cb: CallbackQuery):
@@ -275,6 +286,11 @@ async def admin_help_reply_send(msg: Message, state: FSMContext):
         except Exception as ex:
             log.warning("author notify failed: %s", ex)
 
+
+# ============================================================
+# БЭКАПЫ
+# ============================================================
+
 @router.callback_query(F.data == "adm_backups")
 async def admin_backups(cb: CallbackQuery):
     tg = cb.from_user.id
@@ -282,9 +298,10 @@ async def admin_backups(cb: CallbackQuery):
     if not is_admin(tg, user):
         await cb.answer("Нет доступа", show_alert=True)
         return
+
     items = list_backups()
     hb = last_heartbeat()
-    lines = ["💾 Бэкапы базы", ""]
+    lines = ["💾 <b>Бэкапы базы</b>", ""]
     if hb:
         delta = datetime.utcnow() - hb
         mins = int(delta.total_seconds() / 60)
@@ -300,6 +317,5 @@ async def admin_backups(cb: CallbackQuery):
                 it["date"].strftime("%d.%m %H:%M") +
                 "  " + str(it["size_kb"]) + " КБ"
             )
-    from app.keyboards import kb_admin
     await cb.message.edit_text("\n".join(lines), reply_markup=kb_admin())
-    await cb.answer()            
+    await cb.answer()
