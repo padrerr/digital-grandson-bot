@@ -33,3 +33,5 @@ Thumbs.db
 
 # Личное
 test_gigachat.py
+*.swp
+*.swo

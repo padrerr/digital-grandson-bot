@@ -3,8 +3,6 @@ SQLAlchemy==2.0.35
 aiosqlite==0.20.0
 APScheduler==3.10.4
 pydantic-settings==2.5.2
-gigachat==0.2.3
+gigachat==0.1.20
 python-dotenv==1.0.1
-openai>=1.0,<2.0
-pypdf>=4.0
-setuptools<81
+#openai-whisper==20231117
