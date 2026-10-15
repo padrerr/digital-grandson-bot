@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import os
 from datetime import datetime
 
 from aiogram import Router, F, Bot
@@ -9,7 +7,6 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-from app.config import settings
 from app.db import (
     get_user_by_tg, get_elderly_by_user, get_user_family,
     list_family_members, list_family_elderly, get_elderly, get_user,
@@ -23,12 +20,13 @@ log = logging.getLogger(__name__)
 router = Router()
 
 
-# ============================================================
-# ФИЛЬТРЫ РОЛЕЙ
-# ============================================================
+VOICE_DISABLED_TEXT = (
+    "🎤 Голосовые сообщения временно недоступны.\n\n"
+    "Пожалуйста, напишите текстом или используйте кнопки внизу."
+)
+
 
 class IsElderly(BaseFilter):
-    """Пропускает только сообщения от пользователя в роли близкого."""
     async def __call__(self, event) -> bool:
         if not hasattr(event, "from_user") or event.from_user is None:
             return False
@@ -40,7 +38,6 @@ class IsElderly(BaseFilter):
 
 
 class IsFamily(BaseFilter):
-    """Пропускает только родственников (членов семьи)."""
     async def __call__(self, event) -> bool:
         if not hasattr(event, "from_user") or event.from_user is None:
             return False
@@ -50,10 +47,6 @@ class IsFamily(BaseFilter):
         uf = await get_user_family(user.id)
         return bool(uf)
 
-
-# ============================================================
-# СОСТОЯНИЯ
-# ============================================================
 
 class MessageToElderly(StatesGroup):
     waiting = State()
@@ -66,6 +59,7 @@ class MessageToRelative(StatesGroup):
 SYSTEM_BUTTONS = {
     "☀️ Я проснулся",
     "😊 Как я себя чувствую",
+    "🩺 Сообщить о проблеме",
     "📋 Мои задачи",
     "❓ Как пользоваться ботом?",
     "📊 Отчёты",
@@ -75,14 +69,12 @@ SYSTEM_BUTTONS = {
     "✉️ Отправить сообщение родственнику",
     "👨‍👩‍👧 Моя семья",
     "⚙️ Аккаунт",
-    "🩺 Сообщить о проблеме",
 }
 
 
 HINT = (
     "Можно отправить:\n"
     "📝 текст\n"
-    "🎤 голосовое\n"
     "🎥 видеокружок\n"
     "📷 изображение\n\n"
     "Чтобы отменить — отправьте /cancel"
@@ -162,8 +154,6 @@ async def _deliver_to_elderly(bot: Bot, e, msg: Message, kind: str,
             if msg.caption:
                 cap = cap + "\n\n" + msg.caption
             await bot.send_photo(chat_id, msg.photo[-1].file_id, caption=cap)
-        elif kind == "voice":
-            await bot.send_voice(chat_id, msg.voice.file_id, caption=prefix)
         elif kind == "video_note":
             await bot.send_message(chat_id, prefix)
             await bot.send_video_note(chat_id, msg.video_note.file_id)
@@ -204,14 +194,14 @@ async def to_elderly_photo(msg: Message, state: FSMContext):
     await _process_to_elderly(msg, state, "photo")
 
 
-@router.message(MessageToElderly.waiting, F.voice)
-async def to_elderly_voice(msg: Message, state: FSMContext):
-    await _process_to_elderly(msg, state, "voice")
-
-
 @router.message(MessageToElderly.waiting, F.video_note)
 async def to_elderly_video_note(msg: Message, state: FSMContext):
     await _process_to_elderly(msg, state, "video_note")
+
+
+@router.message(MessageToElderly.waiting, F.voice)
+async def to_elderly_voice(msg: Message, state: FSMContext):
+    await msg.answer(VOICE_DISABLED_TEXT)
 
 
 # ============================================================
@@ -294,8 +284,6 @@ async def _deliver_to_relatives(bot: Bot, e, msg: Message, kind: str,
                 if msg.caption:
                     cap = cap + "\n\n" + msg.caption
                 await bot.send_photo(tg, msg.photo[-1].file_id, caption=cap)
-            elif kind == "voice":
-                await bot.send_voice(tg, msg.voice.file_id, caption=prefix)
             elif kind == "video_note":
                 await bot.send_message(tg, prefix)
                 await bot.send_video_note(tg, msg.video_note.file_id)
@@ -342,14 +330,14 @@ async def to_relative_photo(msg: Message, state: FSMContext):
     await _process_to_relative(msg, state, "photo")
 
 
-@router.message(MessageToRelative.waiting, F.voice)
-async def to_relative_voice(msg: Message, state: FSMContext):
-    await _process_to_relative(msg, state, "voice")
-
-
 @router.message(MessageToRelative.waiting, F.video_note)
 async def to_relative_video_note(msg: Message, state: FSMContext):
     await _process_to_relative(msg, state, "video_note")
+
+
+@router.message(MessageToRelative.waiting, F.voice)
+async def to_relative_voice(msg: Message, state: FSMContext):
+    await msg.answer(VOICE_DISABLED_TEXT)
 
 
 # ============================================================
@@ -376,7 +364,7 @@ async def cancel_to_relative(msg: Message, state: FSMContext):
 
 
 # ============================================================
-# ФОТО ОТ БЛИЗКОГО (вне режима отправки)
+# ФОТО ОТ БЛИЗКОГО
 # ============================================================
 
 @router.message(F.photo, IsElderly())
@@ -416,66 +404,14 @@ async def video_note_from_elderly(msg: Message, bot: Bot, state: FSMContext):
 
 
 # ============================================================
-# ГОЛОСОВОЕ ОТ БЛИЗКОГО (Whisper)
+# ГОЛОСОВОЕ ОТ БЛИЗКОГО — ВРЕМЕННО ОТКЛЮЧЕНО
 # ============================================================
 
 @router.message(F.voice, IsElderly())
-async def voice_from_elderly(msg: Message, bot: Bot, state: FSMContext):
+async def voice_from_elderly(msg: Message, state: FSMContext):
     if await state.get_state():
         return
-    user = await get_user_by_tg(msg.from_user.id)
-    e = await get_elderly_by_user(user.id)
-
-    path = None
-    try:
-        file = await bot.get_file(msg.voice.file_id)
-        os.makedirs("data/voice", exist_ok=True)
-        path = "data/voice/" + str(msg.from_user.id) + "_" + str(msg.message_id) + ".ogg"
-        await bot.download_file(file.file_path, path)
-    except Exception as ex:
-        log.warning("voice download failed: %s", ex)
-        await msg.answer("Не удалось скачать голосовое.")
-        return
-
-    await msg.answer("🎧 Слушаю…")
-    from app.voice import transcribe
-    try:
-        loop = asyncio.get_event_loop()
-        text = await loop.run_in_executor(
-            None, transcribe, path, settings.WHISPER_MODEL
-        )
-    except Exception as ex:
-        log.warning("transcribe failed: %s", ex)
-        text = None
-    finally:
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-
-    if not text:
-        await msg.answer("Не смог распознать. Напишите текстом.")
-        return
-
-    await msg.answer("🎤 Распознано: «" + text + "»")
-    level = classify(text)
-    if is_alert(level):
-        async def reply(t):
-            await msg.answer(t)
-        await apply_wellbeing_level(bot, e, level, reply,
-                                    source="voice", log_text=text)
-    elif level in ("good", "ok"):
-        await log_wellbeing(e.id, text, level, source="voice")
-        await msg.answer("Спасибо! Рад за вас.")
-    else:
-        await log_wellbeing(e.id, text, "unknown", source="voice")
-        if not is_quiet_hours(e, datetime.now()):
-            for u, _ in await list_family_members(e.family_id):
-                try:
-                    await bot.send_message(u.tg_id, "🎤 " + e.name + ": " + text)
-                except Exception:
-                    pass
-        await msg.answer("Передал близким.")
+    await msg.answer(VOICE_DISABLED_TEXT)
 
 
 # ============================================================

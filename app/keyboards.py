@@ -6,8 +6,8 @@ from aiogram.types import (
 
 def kb_role():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Я родственник", callback_data="role:family")],
-        [InlineKeyboardButton(text="Я старший родственник", callback_data="role:elderly")],
+        [InlineKeyboardButton(text="👨‍👩‍👧 Родственник", callback_data="role:family")],
+        [InlineKeyboardButton(text="❤️ Близкий", callback_data="role:elderly")],
     ])
 
 

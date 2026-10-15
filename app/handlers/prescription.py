@@ -7,7 +7,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery
 
-from app.config import settings
 from app.db import (
     get_elderly, add_routine, get_routines, delete_all_routines,
     get_user_by_tg, can_edit_family_data,
@@ -23,6 +22,12 @@ from app.scheduler import schedule_absolute_routines
 
 log = logging.getLogger(__name__)
 router = Router()
+
+
+VOICE_DISABLED_TEXT = (
+    "🎤 Голосовой ввод выписки временно недоступен.\n\n"
+    "Пришлите, пожалуйста, текст, фото или PDF."
+)
 
 
 class AISchedule(StatesGroup):
@@ -86,7 +91,6 @@ async def ai_start(cb: CallbackQuery, state: FSMContext):
         "Подойдёт одно из:\n"
         "• 📸 Фотография выписки\n"
         "• 📎 PDF с текстом\n"
-        "• 🎤 Голосовое (продиктуйте)\n"
         "• ✍️ Текст, скопированный из документа\n\n"
         "Я проанализирую и предложу распорядок.\n\n"
         "Важно: документ передаётся в GigaChat. Это черновик, "
@@ -94,6 +98,11 @@ async def ai_start(cb: CallbackQuery, state: FSMContext):
     )
     await cb.message.edit_text(text)
     await cb.answer()
+
+
+@router.message(AISchedule.waiting_text, F.voice)
+async def ai_process_voice(msg: Message, state: FSMContext):
+    await msg.answer(VOICE_DISABLED_TEXT)
 
 
 @router.message(AISchedule.waiting_text, F.photo)
@@ -210,68 +219,6 @@ async def ai_process_document(msg: Message, state: FSMContext, bot: Bot):
     if not items:
         await msg.answer(
             "Не удалось распознать документ. Попробуйте другой файл или текст.",
-            reply_markup=kb_family_menu(),
-        )
-        await state.clear()
-        return
-
-    await _send_preview(msg, state, eid, items)
-
-
-@router.message(AISchedule.waiting_text, F.voice)
-async def ai_process_voice(msg: Message, state: FSMContext, bot: Bot):
-    data = await state.get_data()
-    eid = data.get("ai_eid")
-    e = await get_elderly(eid)
-    if not e:
-        await state.clear()
-        await msg.answer("Близкий не найден.")
-        return
-
-    await msg.answer("🎧 Слушаю голосовое…")
-
-    path = None
-    try:
-        file = await bot.get_file(msg.voice.file_id)
-        os.makedirs("data/tmp", exist_ok=True)
-        path = "data/tmp/ai_voice_" + str(msg.from_user.id) + "_" + str(msg.message_id) + ".ogg"
-        await bot.download_file(file.file_path, path)
-    except Exception as ex:
-        log.warning("voice download failed: %s", ex)
-        await msg.answer("Не удалось скачать голосовое.")
-        return
-
-    try:
-        import asyncio
-        from app.voice import transcribe
-        loop = asyncio.get_event_loop()
-        text = await loop.run_in_executor(
-            None, transcribe, path, settings.WHISPER_MODEL
-        )
-    except Exception as ex:
-        log.warning("voice transcribe failed: %s", ex)
-        text = None
-    finally:
-        try:
-            os.remove(path)
-        except Exception:
-            pass
-
-    if not text or len(text) < 20:
-        await msg.answer(
-            "Не удалось распознать текст. Попробуйте записать ещё раз "
-            "в тихом месте или напишите текстом."
-        )
-        return
-
-    await msg.answer("🎤 Распознано: «" + text[:200] + "…»\n\n"
-                     "Отправляю в GigaChat. Это займёт 20–40 секунд…")
-
-    items = await generate_schedule_from_text(text)
-    if not items:
-        await msg.answer(
-            "Не удалось собрать расписание. Попробуйте ещё раз или "
-            "пришлите выписку текстом.",
             reply_markup=kb_family_menu(),
         )
         await state.clear()

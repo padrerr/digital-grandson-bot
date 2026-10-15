@@ -46,15 +46,12 @@ def is_admin(tg_id: int, user) -> bool:
 # /admin
 # ============================================================
 
-@router.message(Command("admin"))
-@router.message(Command("admin"))
-async def admin_panel(msg: Message):
-    tg = msg.from_user.id
-    user = await get_user_by_tg(tg)
-    if not is_admin(tg, user):
+        await msg.answer(
+            "Нет доступа.\n"
+            "Ваш ID: " + str(tg) + "\n"
+            "ADMIN_IDS: " + str(settings.admin_ids)
+        )
         return
-    # ...
-
 
 @router.callback_query(F.data == "adm_back")
 async def admin_back(cb: CallbackQuery):
