@@ -76,7 +76,8 @@ async def help_send(cb: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await cb.message.edit_text(
-        "✅ Заявка #" + str(hr.id) + " отправлена. Ответ в «📨 Мои заявки»."
+        "✅ Обращение #" + str(hr.id) + " отправлено. "
+        "Ответ придёт в чат и будет храниться в «📨 История обращений»."
     )
     await cb.answer("Отправлено")
 
@@ -98,7 +99,7 @@ async def help_send(cb: CallbackQuery, state: FSMContext):
 # МОИ ЗАЯВКИ
 # ============================================================
 
-@router.message(F.text == "📨 Мои заявки")
+@router.message(F.text == "📨 История обращений")
 async def my_help_requests(msg: Message):
     user = await get_user_by_tg(msg.from_user.id)
     if not user:
@@ -106,8 +107,8 @@ async def my_help_requests(msg: Message):
     reqs = await list_user_help_requests(user.id)
     if not reqs:
         await msg.answer(
-            "📨 Мои заявки\n\n"
-            "У вас пока нет заявок.\n\n"
+            "📨 История обращений\n\n"
+            "У вас пока нет обращений.\n\n"
             "Чтобы создать — нажмите «🛠 Написать в техподдержку»."
         )
         return

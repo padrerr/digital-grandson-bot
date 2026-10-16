@@ -9,7 +9,7 @@ from aiogram.types import Message, CallbackQuery
 
 from app.db import (
     get_elderly, add_routine, get_routines, delete_all_routines,
-    get_user_by_tg, can_edit_family_data,
+    get_user_by_tg, can_edit_family_data, create_custom_template,
 )
 from app.keyboards import kb_ai_preview, kb_family_menu
 from app.services.prescription_ai import (
@@ -267,9 +267,13 @@ async def ai_cancel(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith("ai_apply:"))
-async def ai_apply(cb: CallbackQuery, state: FSMContext):
-    mode = cb.data.split(":")[1]
+class SaveAITemplate(StatesGroup):
+    name = State()
+
+
+@router.callback_query(F.data == "ai_apply_save")
+async def ai_apply_and_save(cb: CallbackQuery, state: FSMContext):
+    """Применяет задачи и просит имя для шаблона."""
     data = await state.get_data()
     eid = data.get("ai_eid")
     items = data.get("ai_items", [])
@@ -279,9 +283,8 @@ async def ai_apply(cb: CallbackQuery, state: FSMContext):
         await state.clear()
         return
 
-    if mode == "replace":
-        await delete_all_routines(eid)
-
+    # Применяем как replace
+    await delete_all_routines(eid)
     count = 0
     for it in items:
         await add_routine(
@@ -290,13 +293,89 @@ async def ai_apply(cb: CallbackQuery, state: FSMContext):
             measure_kind=it.get("measure_kind"),
         )
         count = count + 1
-
-    await state.clear()
     await schedule_absolute_routines(cb.bot)
 
-    action = "применено задач" if mode == "replace" else "добавлено задач"
+    # Просим имя для шаблона
+    await state.set_state(SaveAITemplate.name)
     await cb.message.edit_text(
-        "✅ Успешно " + action + ": " + str(count) + ".\n"
-        "Откройте распорядок, чтобы проверить."
+        "✅ Применено задач: " + str(count) + ".\n\n"
+        "Теперь введите название для шаблона, чтобы сохранить его "
+        "для будущего использования.\n\n"
+        "Например: «Мама — кардиология»"
     )
-    await cb.answer("Готово")
+    await cb.answer()
+
+
+class SaveAITemplate(StatesGroup):
+    name = State()
+
+
+@router.callback_query(F.data == "ai_apply_save")
+async def ai_apply_and_save(cb: CallbackQuery, state: FSMContext):
+    """Применяет задачи и просит имя для шаблона."""
+    data = await state.get_data()
+    eid = data.get("ai_eid")
+    items = data.get("ai_items", [])
+    e = await get_elderly(eid)
+    if not e or not items:
+        await cb.answer("Данные потеряны. Начните заново.", show_alert=True)
+        await state.clear()
+        return
+
+    # Применяем как replace
+    await delete_all_routines(eid)
+    count = 0
+    for it in items:
+        await add_routine(
+            eid, it["title"], mode="wake_offset",
+            offset_min=it["offset_min"],
+            measure_kind=it.get("measure_kind"),
+        )
+        count = count + 1
+    await schedule_absolute_routines(cb.bot)
+
+    # Просим имя для шаблона
+    await state.set_state(SaveAITemplate.name)
+    await cb.message.edit_text(
+        "✅ Применено задач: " + str(count) + ".\n\n"
+        "Теперь введите название для шаблона, чтобы сохранить его "
+        "для будущего использования.\n\n"
+        "Например: «Мама — кардиология»"
+    )
+    await cb.answer()
+
+
+@router.message(SaveAITemplate.name, F.text, ~F.text.startswith("/"))
+async def ai_save_template_name(msg: Message, state: FSMContext):
+    txt = (msg.text or "").strip()
+    if not txt or len(txt) > 60:
+        await msg.answer("Название от 1 до 60 символов.")
+        return
+    data = await state.get_data()
+    items = data.get("ai_items", [])
+    eid = data.get("ai_eid")
+    e = await get_elderly(eid)
+    if not e or not items:
+        await state.clear()
+        await msg.answer("Данные потеряны.")
+        return
+
+    from app.db import create_custom_template
+    # Приводим items к формату шаблона
+    tpl_items = []
+    for it in items:
+        tpl_items.append({
+            "title": it["title"],
+            "mode": "wake_offset",
+            "offset_min": it["offset_min"],
+            "hour": it.get("hour", 8),
+            "minute": it.get("minute", 0),
+            "measure_kind": it.get("measure_kind"),
+        })
+    await create_custom_template(e.family_id, txt, tpl_items)
+    await state.clear()
+    await msg.answer(
+        "💾 Шаблон «" + txt + "» сохранён.\n"
+        "Найти его можно в «🎁 Шаблоны» → «📂 Мои шаблоны».",
+        reply_markup=kb_family_menu(),
+    )

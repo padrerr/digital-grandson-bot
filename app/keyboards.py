@@ -21,7 +21,7 @@ def kb_consent():
 def kb_family_menu():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="👨‍👩‍👧 Моя семья"), KeyboardButton(text="⚙️ Аккаунт")],
-        [KeyboardButton(text="📊 Отчёты"), KeyboardButton(text="📨 Мои заявки")],
+        [KeyboardButton(text="📊 Отчёты"), KeyboardButton(text="📨 История обращений")],
         [KeyboardButton(text="✉️ Отправить сообщение близкому")],
         [KeyboardButton(text="🛠 Написать в техподдержку"), KeyboardButton(text="❓ Как пользоваться ботом?")],
     ], resize_keyboard=True)
@@ -307,21 +307,17 @@ def kb_templates(elderly_id: int, has_routines: bool = False):
 
 
 def kb_template_apply_mode(elderly_id: int, key: str, has_routines: bool):
-    rows = []
+    rows = [
+        [InlineKeyboardButton(
+            text="✅ Применить (заменить всё)",
+            callback_data="tpl_mode:" + str(elderly_id) + ":" + key + ":replace",
+        )],
+    ]
     if has_routines:
         rows.append([InlineKeyboardButton(
-            text="🔄 Заменить всё текущее",
-            callback_data="tpl_mode:" + str(elderly_id) + ":" + key + ":replace",
+            text="➕ Добавить к текущим",
+            callback_data="tpl_mode:" + str(elderly_id) + ":" + key + ":append",
         )])
-    else:
-        rows.append([InlineKeyboardButton(
-            text="✅ Применить",
-            callback_data="tpl_mode:" + str(elderly_id) + ":" + key + ":replace",
-        )])
-    rows.append([InlineKeyboardButton(
-        text="➕ Добавить к текущим",
-        callback_data="tpl_mode:" + str(elderly_id) + ":" + key + ":append",
-    )])
     rows.append([InlineKeyboardButton(
         text="⬅️ Отмена",
         callback_data="tpl:" + str(elderly_id),
@@ -348,21 +344,17 @@ def kb_custom_templates(elderly_id: int, templates: list):
 
 
 def kb_custom_template_apply(tid: int, elderly_id: int, has_routines: bool):
-    rows = []
+    rows = [
+        [InlineKeyboardButton(
+            text="✅ Применить (заменить всё)",
+            callback_data="tpl_custom_mode:" + str(tid) + ":" + str(elderly_id) + ":replace",
+        )],
+    ]
     if has_routines:
         rows.append([InlineKeyboardButton(
-            text="🔄 Заменить всё текущее",
-            callback_data="tpl_custom_mode:" + str(tid) + ":" + str(elderly_id) + ":replace",
+            text="➕ Добавить к текущим",
+            callback_data="tpl_custom_mode:" + str(tid) + ":" + str(elderly_id) + ":append",
         )])
-    else:
-        rows.append([InlineKeyboardButton(
-            text="✅ Применить",
-            callback_data="tpl_custom_mode:" + str(tid) + ":" + str(elderly_id) + ":replace",
-        )])
-    rows.append([InlineKeyboardButton(
-        text="➕ Добавить к текущим",
-        callback_data="tpl_custom_mode:" + str(tid) + ":" + str(elderly_id) + ":append",
-    )])
     rows.append([InlineKeyboardButton(
         text="⬅️ Отмена",
         callback_data="tpl_my:" + str(elderly_id),
@@ -559,20 +551,20 @@ def kb_report_elderly(elderly_id: int):
 
 
 def kb_ai_preview(has_routines: bool):
-    rows = []
+    rows = [
+        [InlineKeyboardButton(
+            text="✅ Применить (заменить всё)",
+            callback_data="ai_apply:replace",
+        )],
+    ]
     if has_routines:
         rows.append([InlineKeyboardButton(
-            text="🔄 Заменить всё текущее",
-            callback_data="ai_apply:replace",
-        )])
-    else:
-        rows.append([InlineKeyboardButton(
-            text="✅ Применить",
-            callback_data="ai_apply:replace",
+            text="➕ Добавить к текущим",
+            callback_data="ai_apply:append",
         )])
     rows.append([InlineKeyboardButton(
-        text="➕ Добавить к текущим",
-        callback_data="ai_apply:append",
+        text="💾 Применить и сохранить как шаблон",
+        callback_data="ai_apply_save",
     )])
     rows.append([InlineKeyboardButton(
         text="❌ Отмена",
