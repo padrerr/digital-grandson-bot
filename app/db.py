@@ -1053,3 +1053,106 @@ async def admin_stats() -> dict:
             "help_total": len(help_all),
             "help_new": len(help_new),
         }
+        
+        
+        # ============================================================
+# ANALYTICS
+# ============================================================
+
+async def weekly_progress(elderly_id: int, days: int = 7):
+    """Возвращает список дней с разбивкой выполненных/пропущенных задач."""
+    end = datetime.utcnow()
+    start = end - timedelta(days=days)
+    async with Session() as s:
+        r = await s.execute(select(Event).where(
+            and_(Event.elderly_id == elderly_id,
+                 Event.kind == "routine",
+                 Event.created_at >= start,
+                 Event.created_at <= end)
+        ).order_by(Event.created_at))
+        events = list(r.scalars().all())
+
+    by_day = {}
+    for e in events:
+        key = e.created_at.strftime("%Y-%m-%d")
+        if key not in by_day:
+            by_day[key] = {"done": 0, "skipped": 0, "alarm": 0,
+                           "pending": 0, "total": 0}
+        by_day[key]["total"] = by_day[key]["total"] + 1
+        if e.status in by_day[key]:
+            by_day[key][e.status] = by_day[key][e.status] + 1
+
+    result = []
+    for i in range(days):
+        d = (end - timedelta(days=days - 1 - i)).date()
+        key = d.isoformat()
+        stats = by_day.get(key, {"done": 0, "skipped": 0, "alarm": 0,
+                                 "pending": 0, "total": 0})
+        stats["date"] = d
+        result.append(stats)
+    return result
+
+
+async def family_activity_log(family_id: int, elderly_ids: list,
+                              hours: int = 24, limit: int = 50):
+    """Лента событий за период. Возвращает список кортежей (time, text)."""
+    since = datetime.utcnow() - timedelta(hours=hours)
+    log_items = []
+
+    if not elderly_ids:
+        return []
+
+    async with Session() as s:
+        r = await s.execute(select(Event).where(
+            and_(Event.elderly_id.in_(elderly_ids),
+                 Event.created_at >= since)
+        ).order_by(Event.created_at))
+        for ev in r.scalars().all():
+            t = ev.created_at.strftime("%H:%M")
+            if ev.kind == "routine":
+                if ev.status == "done":
+                    text = "✅ задача выполнена"
+                elif ev.status == "skipped":
+                    text = "⏭ задача пропущена"
+                elif ev.status == "alarm":
+                    text = "⚠️ задача не подтверждена"
+                else:
+                    text = "⏳ задача ожидает"
+                log_items.append((ev.created_at, t, text, ev.elderly_id))
+            elif ev.kind == "wellbeing":
+                if ev.status in ("bad", "help", "critical"):
+                    log_items.append((ev.created_at, t,
+                                      "⚠️ самочувствие: " + ev.status,
+                                      ev.elderly_id))
+
+        r2 = await s.execute(select(WellbeingLog).where(
+            and_(WellbeingLog.elderly_id.in_(elderly_ids),
+                 WellbeingLog.created_at >= since)
+        ).order_by(WellbeingLog.created_at))
+        for lg in r2.scalars().all():
+            if lg.category in ("bad", "help", "critical"):
+                t = lg.created_at.strftime("%H:%M")
+                log_items.append((lg.created_at, t,
+                                  "💬 жалоба: " + lg.text[:40],
+                                  lg.elderly_id))
+
+        r3 = await s.execute(select(AlertAck).where(
+            and_(AlertAck.elderly_id.in_(elderly_ids),
+                 AlertAck.created_at >= since)
+        ).order_by(AlertAck.created_at))
+        for a in r3.scalars().all():
+            t = a.created_at.strftime("%H:%M")
+            log_items.append((a.created_at, t,
+                              "✅ взято на контроль", a.elderly_id))
+
+    log_items.sort(key=lambda x: x[0], reverse=True)
+    return log_items[:limit]
+
+
+async def get_elderly_names(elderly_ids: list) -> dict:
+    """Возвращает {id: name} для списка близких."""
+    if not elderly_ids:
+        return {}
+    async with Session() as s:
+        r = await s.execute(select(Elderly).where(Elderly.id.in_(elderly_ids)))
+        return {e.id: e.name for e in r.scalars().all()}
