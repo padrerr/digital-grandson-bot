@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-
+from app.constants import SYSTEM_BUTTONS
 from aiogram import Router, F, Bot
 from aiogram.filters import BaseFilter
 from aiogram.types import Message, CallbackQuery
@@ -55,21 +55,6 @@ class MessageToElderly(StatesGroup):
 class MessageToRelative(StatesGroup):
     waiting = State()
 
-
-SYSTEM_BUTTONS = {
-    "☀️ Я проснулся",
-    "😊 Как я себя чувствую",
-    "🩺 Сообщить о проблеме",
-    "📋 Мои задачи",
-    "❓ Как пользоваться ботом?",
-    "📊 Отчёты",
-    "📨 Мои заявки",
-    "🛠 Написать в техподдержку",
-    "✉️ Отправить сообщение близкому",
-    "✉️ Отправить сообщение родственнику",
-    "👨‍👩‍👧 Моя семья",
-    "⚙️ Аккаунт",
-}
 
 
 HINT = (

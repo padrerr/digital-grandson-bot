@@ -32,13 +32,23 @@ class AddElderly(StatesGroup):
 async def family_view(msg: Message):
     user = await get_user_by_tg(msg.from_user.id)
     if not user:
+        await msg.answer(
+            "Я вас не вижу в базе. Отправьте /start, чтобы начать."
+        )
         return
     uf = await get_user_family(user.id)
     if not uf:
-        await msg.answer("Сначала создайте семью: /start")
+        await msg.answer(
+            "Похоже, вы ещё не в семье.\n\n"
+            "Если вас приглашали — попросите владельца прислать ссылку "
+            "заново, либо отправьте /start для создания своей семьи."
+        )
         return
     f, _ = uf
-    await msg.answer(f"{f.name}\nВыберите раздел:", reply_markup=kb_family_root())
+    await msg.answer(
+        f"<b>{f.name}</b>\nВыберите раздел:",
+        reply_markup=kb_family_root(),
+    )
 
 
 @router.callback_query(F.data == "fam:root")

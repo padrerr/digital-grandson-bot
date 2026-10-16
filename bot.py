@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.config import settings
 from app.db import init_db
 from app.handlers import setup_routers
+from app.middlewares import ClearStateOnSystemButton
 from app.scheduler import bootstrap, scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,10 @@ async def main():
         default=DefaultBotProperties(parse_mode="HTML"),
     )
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Регистрируем middleware ДО включения роутеров
+    dp.message.middleware(ClearStateOnSystemButton())
+
     dp.include_router(setup_routers())
 
     scheduler.start()
