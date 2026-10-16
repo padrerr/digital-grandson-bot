@@ -12,11 +12,11 @@ from app.db import (
     list_family_elderly, add_elderly,
     count_family_members, count_family_elderly,
     set_member_role, get_member_role,
-    can_edit_family_data,
+    can_edit_family_data, get_elderly_by_user,
 )
 from app.keyboards import (
     kb_family_root, kb_relatives_panel, kb_elderly_panel,
-    kb_family_menu,
+    kb_family_menu, kb_leave_family_confirm,
 )
 from app.services.audit import log_action
 
@@ -27,6 +27,10 @@ router = Router()
 class AddElderly(StatesGroup):
     name = State()
 
+
+# ============================================================
+# СЕМЬЯ — КОРЕНЬ
+# ============================================================
 
 @router.message(F.text.contains("Моя семья"))
 async def family_view(msg: Message):
@@ -62,8 +66,26 @@ async def fam_root(cb: CallbackQuery):
         await cb.answer("Семья не найдена", show_alert=True)
         return
     f, _ = uf
-    await cb.message.edit_text(f"{f.name}\nВыберите раздел:",
+    await cb.message.edit_text(f"<b>{f.name}</b>\nВыберите раздел:",
                                reply_markup=kb_family_root())
+    await cb.answer()
+
+
+@router.callback_query(F.data == "family:back")
+async def family_back_cb(cb: CallbackQuery):
+    user = await get_user_by_tg(cb.from_user.id)
+    if not user:
+        await cb.answer()
+        return
+    uf = await get_user_family(user.id)
+    if not uf:
+        await cb.answer("Вы не в семье", show_alert=True)
+        return
+    f, _ = uf
+    await cb.message.edit_text(
+        f"<b>{f.name}</b>\nВыберите раздел:",
+        reply_markup=kb_family_root(),
+    )
     await cb.answer()
 
 
@@ -71,6 +93,10 @@ async def fam_root(cb: CallbackQuery):
 async def noop(cb: CallbackQuery):
     await cb.answer()
 
+
+# ============================================================
+# РОДСТВЕННИКИ
+# ============================================================
 
 @router.callback_query(F.data == "fam:relatives")
 async def fam_relatives(cb: CallbackQuery):
@@ -87,34 +113,14 @@ async def fam_relatives(cb: CallbackQuery):
     text = (
         "👥 Семья — родственники\n\n"
         "👑 владелец   🔧 модератор   • участник\n\n"
-        "Всего: " + str(len(members)) + " из " + str(settings.MAX_FAMILY_MEMBERS) + ".\n\n"
+        "Всего: " + str(len(members)) + " из "
+        + str(settings.MAX_FAMILY_MEMBERS) + ".\n\n"
         "Владелец и модератор могут менять распорядок. "
         "Остальные — просматривать отчёты и писать близкому."
     )
     await cb.message.edit_text(
         text, reply_markup=kb_relatives_panel(members, f.owner_user_id, user.id)
     )
-    await cb.answer()
-
-
-@router.callback_query(F.data == "fam:elderly")
-async def fam_elderly(cb: CallbackQuery):
-    user = await get_user_by_tg(cb.from_user.id)
-    if not user:
-        await cb.answer()
-        return
-    uf = await get_user_family(user.id)
-    if not uf:
-        await cb.answer("Семья не найдена", show_alert=True)
-        return
-    f, _ = uf
-    elderly = await list_family_elderly(f.id)
-    text = (
-        "❤️ Близкие под нашей заботой\n\n"
-        "Всего: " + str(len(elderly)) + " из " + str(settings.MAX_ELDERLY_PER_FAMILY) + ".\n"
-        "✅ — подключён, ⏳ — ждёт приглашения."
-    )
-    await cb.message.edit_text(text, reply_markup=kb_elderly_panel(elderly))
     await cb.answer()
 
 
@@ -222,6 +228,32 @@ async def del_member(cb: CallbackQuery):
     await fam_relatives(cb)
 
 
+# ============================================================
+# БЛИЗКИЕ
+# ============================================================
+
+@router.callback_query(F.data == "fam:elderly")
+async def fam_elderly(cb: CallbackQuery):
+    user = await get_user_by_tg(cb.from_user.id)
+    if not user:
+        await cb.answer()
+        return
+    uf = await get_user_family(user.id)
+    if not uf:
+        await cb.answer("Семья не найдена", show_alert=True)
+        return
+    f, _ = uf
+    elderly = await list_family_elderly(f.id)
+    text = (
+        "❤️ Близкие под нашей заботой\n\n"
+        "Всего: " + str(len(elderly)) + " из "
+        + str(settings.MAX_ELDERLY_PER_FAMILY) + ".\n"
+        "✅ — подключён, ⏳ — ждёт приглашения."
+    )
+    await cb.message.edit_text(text, reply_markup=kb_elderly_panel(elderly))
+    await cb.answer()
+
+
 @router.callback_query(F.data == "add_elderly")
 async def add_elderly_start(cb: CallbackQuery, state: FSMContext):
     user = await get_user_by_tg(cb.from_user.id)
@@ -239,7 +271,8 @@ async def add_elderly_start(cb: CallbackQuery, state: FSMContext):
     count = await count_family_elderly(f.id)
     if count >= settings.MAX_ELDERLY_PER_FAMILY:
         await cb.answer(
-            "Достигнут лимит близких в семье (" + str(settings.MAX_ELDERLY_PER_FAMILY) + ").",
+            "Достигнут лимит близких в семье ("
+            + str(settings.MAX_ELDERLY_PER_FAMILY) + ").",
             show_alert=True,
         )
         return
@@ -274,7 +307,10 @@ async def add_elderly_finish(msg: Message, state: FSMContext):
     await state.clear()
     bot_username = (await msg.bot.me()).username
     link = "https://t.me/" + bot_username + "?start=eld_" + e.invite_code
-    text = "Добавлен(а): " + e.name + "\n\nСсылку открывает сам близкий:\n" + link
+    text = (
+        "Добавлен(а): " + e.name + "\n\n"
+        "Ссылку открывает сам близкий:\n" + link
+    )
     await msg.answer(text, reply_markup=kb_family_menu())
 
 
@@ -295,7 +331,8 @@ async def invite_member(cb: CallbackQuery):
     count = await count_family_members(f.id)
     if count >= settings.MAX_FAMILY_MEMBERS:
         await cb.answer(
-            "Достигнут лимит участников семьи (" + str(settings.MAX_FAMILY_MEMBERS) + ").",
+            "Достигнут лимит участников семьи ("
+            + str(settings.MAX_FAMILY_MEMBERS) + ").",
             show_alert=True,
         )
         return
@@ -311,3 +348,109 @@ async def invite_member(cb: CallbackQuery):
         ),
     )
     await cb.answer()
+
+
+# ============================================================
+# ВЫХОД ИЗ СЕМЬИ
+# ============================================================
+
+@router.callback_query(F.data == "leave_family")
+async def leave_family_start(cb: CallbackQuery):
+    user = await get_user_by_tg(cb.from_user.id)
+    if not user:
+        await cb.answer()
+        return
+    uf = await get_user_family(user.id)
+    if not uf:
+        await cb.answer("Вы не в семье", show_alert=True)
+        return
+    f, role = uf
+
+    eld = await get_elderly_by_user(user.id)
+    if eld:
+        await cb.answer("Близкий не может выйти из семьи.", show_alert=True)
+        return
+
+    members = await list_family_members(f.id)
+    has_others = len([1 for u, _ in members if u.id != user.id]) > 0
+
+    if role == "owner" and not has_others:
+        text = (
+            "🚪 <b>Выйти из семьи</b>\n\n"
+            "Вы единственный участник семьи. Если вы выйдете, "
+            "семья будет удалена вместе со всеми данными близких.\n\n"
+            "Если хотите удалить семью — используйте «⚙️ Аккаунт» → "
+            "«🗑 Удалить аккаунт».\n\n"
+            "Сначала пригласите кого-то, чтобы передать владение."
+        )
+    elif role == "owner":
+        text = (
+            "🚪 <b>Выйти из семьи</b>\n\n"
+            "Вы владелец. При выходе владение перейдёт другому "
+            "участнику (сначала модератору, иначе самому старшему).\n\n"
+            "Продолжить?"
+        )
+    else:
+        text = (
+            "🚪 <b>Выйти из семьи</b>\n\n"
+            "Вы выйдете из семьи. Ваши данные сохранятся, "
+            "но вы потеряете доступ к отчётам и близким.\n\n"
+            "Продолжить?"
+        )
+
+    await cb.message.edit_text(
+        text,
+        reply_markup=kb_leave_family_confirm(
+            is_owner=(role == "owner"),
+            has_others=has_others,
+        ),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data == "leave_family_yes")
+async def leave_family_confirm(cb: CallbackQuery):
+    from app.db import leave_family as db_leave
+
+    user = await get_user_by_tg(cb.from_user.id)
+    if not user:
+        await cb.answer()
+        return
+
+    result = await db_leave(user.id)
+    if not result.get("ok"):
+        await cb.answer(result.get("reason", "Не удалось"), show_alert=True)
+        return
+
+    await log_action(user.id, result.get("family_id"),
+                     "leave_family", "role=" + result.get("role", ""))
+
+    fam_id = result.get("family_id")
+    if fam_id and not result.get("family_deleted"):
+        members = await list_family_members(fam_id)
+        for u, _ in members:
+            try:
+                if result.get("new_owner_id") == u.id:
+                    await cb.bot.send_message(
+                        u.tg_id,
+                        "👑 Владелец покинул семью. Теперь владелец — вы."
+                    )
+                else:
+                    await cb.bot.send_message(
+                        u.tg_id,
+                        "ℹ️ " + (user.name or "Участник") + " покинул(а) семью."
+                    )
+            except Exception:
+                pass
+
+    if result.get("family_deleted"):
+        await cb.message.edit_text(
+            "Семья удалена. Чтобы начать заново — /start."
+        )
+    else:
+        await cb.message.edit_text(
+            "Вы вышли из семьи. Чтобы вернуться — попросите "
+            "родственников прислать приглашение заново.\n\n"
+            "Если хотите создать свою семью — /start."
+        )
+    await cb.answer("Вы вышли")

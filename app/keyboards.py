@@ -75,6 +75,10 @@ def kb_relatives_panel(members: list, owner_user_id: int, my_user_id: int):
             text="➕ Пригласить родственника",
             callback_data="invite_member",
         )])
+    rows.append([InlineKeyboardButton(
+        text="🚪 Выйти из семьи",
+        callback_data="leave_family",
+    )])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="fam:root")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -405,6 +409,8 @@ def kb_help_confirm():
 
 def kb_account_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚪 Выйти из семьи",
+                              callback_data="leave_family")],
         [InlineKeyboardButton(text="🔕 Пауза в уведомлениях",
                               callback_data="mute_panel")],
         [InlineKeyboardButton(text="🗑 Удалить аккаунт",
@@ -640,3 +646,20 @@ def kb_mute_panel(current_mute=None):
             [InlineKeyboardButton(text="🔕 7 дней", callback_data="mute:10080")],
         ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def kb_leave_family_confirm(is_owner: bool, has_others: bool):
+    if is_owner and not has_others:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Понятно", callback_data="family:back")],
+        ])
+    if is_owner and has_others:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⚠️ Да, передать владение и выйти",
+                                  callback_data="leave_family_yes")],
+            [InlineKeyboardButton(text="⬅️ Остаться", callback_data="family:back")],
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚠️ Да, выйти",
+                              callback_data="leave_family_yes")],
+        [InlineKeyboardButton(text="⬅️ Остаться", callback_data="family:back")],
+    ])

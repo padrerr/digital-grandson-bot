@@ -1156,3 +1156,92 @@ async def get_elderly_names(elderly_ids: list) -> dict:
     async with Session() as s:
         r = await s.execute(select(Elderly).where(Elderly.id.in_(elderly_ids)))
         return {e.id: e.name for e in r.scalars().all()}
+        
+        
+        # ============================================================
+# LEAVE FAMILY
+# ============================================================
+
+async def leave_family(user_id: int) -> dict:
+    """
+    Выход пользователя из семьи.
+    Возвращает:
+      {
+        "ok": bool,
+        "reason": str,           # если не получилось
+        "role": str,             # роль, с которой вышел
+        "family_id": int,
+        "family_name": str,
+        "new_owner_id": int|None,  # если был owner и передал
+        "family_deleted": bool,    # если был последним
+      }
+    """
+    from sqlalchemy import delete as sqldel
+    async with Session() as s:
+        r = await s.execute(select(FamilyMember).where(
+            FamilyMember.user_id == user_id
+        ).order_by(FamilyMember.id.asc()))
+        m = r.scalars().first()
+        if not m:
+            return {"ok": False, "reason": "Вы не состоите в семье."}
+
+        f = await s.get(Family, m.family_id)
+        if not f:
+            await s.delete(m)
+            await s.commit()
+            return {"ok": False, "reason": "Семья не найдена."}
+
+        result = {
+            "ok": True,
+            "role": m.role,
+            "family_id": f.id,
+            "family_name": f.name,
+            "new_owner_id": None,
+            "family_deleted": False,
+        }
+
+        if m.role == "owner":
+            # Ищем других участников
+            r2 = await s.execute(select(FamilyMember).where(
+                and_(FamilyMember.family_id == f.id,
+                     FamilyMember.user_id != user_id)
+            ).order_by(FamilyMember.id.asc()))
+            others = list(r2.scalars().all())
+            if not others:
+                # Владелец один — удаляем всю семью
+                r3 = await s.execute(
+                    select(Elderly).where(Elderly.family_id == f.id)
+                )
+                for e in r3.scalars().all():
+                    await s.execute(sqldel(Routine).where(Routine.elderly_id == e.id))
+                    await s.execute(sqldel(Event).where(Event.elderly_id == e.id))
+                    await s.execute(sqldel(WellbeingLog).where(WellbeingLog.elderly_id == e.id))
+                    await s.execute(sqldel(Measurement).where(Measurement.elderly_id == e.id))
+                    await s.execute(sqldel(Note).where(Note.elderly_id == e.id))
+                    await s.execute(sqldel(AlertAck).where(AlertAck.elderly_id == e.id))
+                    await s.delete(e)
+                await s.execute(sqldel(CustomTemplate).where(CustomTemplate.family_id == f.id))
+                await s.delete(m)
+                await s.delete(f)
+                await s.commit()
+                result["family_deleted"] = True
+                return result
+
+            # Передаём владение первому оставшемуся
+            new_owner = others[0]
+            # приоритет — модератор, если он есть
+            for o in others:
+                if o.role == "moderator":
+                    new_owner = o
+                    break
+            new_owner.role = "owner"
+            f.owner_user_id = new_owner.user_id
+            result["new_owner_id"] = new_owner.user_id
+            await s.delete(m)
+            await s.commit()
+            return result
+
+        # Обычный участник или модератор — просто выходим
+        await s.delete(m)
+        await s.commit()
+        return result
