@@ -166,7 +166,6 @@ class Note(Base):
     text: Mapped[str] = mapped_column(String(200))
     remind_at: Mapped[datetime] = mapped_column(DateTime)
     status: Mapped[str] = mapped_column(String(20), default="pending")
-    # pending | sent | done
     feedback: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -208,12 +207,42 @@ async def _migrate():
             log.warning("Migration failed: %s", e)
 
 
+async def _cleanup_duplicates():
+    """Чистит дубликаты в family_members — оставляет самую раннюю запись."""
+    try:
+        async with engine.begin() as conn:
+            r = await conn.execute(text(
+                "SELECT user_id, COUNT(*) as c FROM family_members "
+                "GROUP BY user_id HAVING c > 1"
+            ))
+            dup_users = [row[0] for row in r.fetchall()]
+            for uid in dup_users:
+                r2 = await conn.execute(text(
+                    "SELECT id FROM family_members WHERE user_id = :uid "
+                    "ORDER BY id ASC"
+                ), {"uid": uid})
+                ids = [row[0] for row in r2.fetchall()]
+                keep = ids[0]
+                to_delete = ids[1:]
+                for x in to_delete:
+                    await conn.execute(text(
+                        "DELETE FROM family_members WHERE id = :x"
+                    ), {"x": x})
+                log.info(
+                    "Cleaned duplicate family_members for user %s: "
+                    "kept %s, removed %s", uid, keep, to_delete,
+                )
+    except Exception as e:
+        log.warning("Cleanup duplicates failed: %s", e)
+
+
 async def init_db():
     import os
     os.makedirs("data", exist_ok=True)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await _migrate()
+    await _cleanup_duplicates()
 
 
 def new_code() -> str:
@@ -227,7 +256,7 @@ def new_code() -> str:
 async def get_user_by_tg(tg_id: int) -> User | None:
     async with Session() as s:
         r = await s.execute(select(User).where(User.tg_id == tg_id))
-        u = r.scalar_one_or_none()
+        u = r.scalars().first()
         if u and tg_id in settings.admin_ids and not u.is_admin:
             u.is_admin = True
             await s.commit()
@@ -266,7 +295,7 @@ async def delete_user_everything(uid: int) -> dict:
             return info
 
         r = await s.execute(select(Elderly).where(Elderly.user_id == uid))
-        eld = r.scalar_one_or_none()
+        eld = r.scalars().first()
         if eld:
             await s.execute(sqldel(Routine).where(Routine.elderly_id == eld.id))
             await s.execute(sqldel(Event).where(Event.elderly_id == eld.id))
@@ -277,8 +306,8 @@ async def delete_user_everything(uid: int) -> dict:
             await s.delete(eld)
 
         r = await s.execute(select(FamilyMember).where(FamilyMember.user_id == uid))
-        m = r.scalar_one_or_none()
-        if m:
+        members = list(r.scalars().all())
+        for m in members:
             f = await s.get(Family, m.family_id)
             if f and f.owner_user_id == uid:
                 info["was_owner"] = True
@@ -307,19 +336,9 @@ async def delete_user_everything(uid: int) -> dict:
                         await s.execute(sqldel(AlertAck).where(AlertAck.elderly_id == e.id))
                         await s.delete(e)
                     await s.execute(sqldel(CustomTemplate).where(CustomTemplate.family_id == m.family_id))
-                    await s.delete(m)
                     await s.delete(f)
                     info["family_deleted"] = True
-                    await s.delete(u)
-                    await s.commit()
-                    return info
-            if not info["family_deleted"]:
-                r4 = await s.execute(
-                    select(FamilyMember).where(FamilyMember.user_id == uid)
-                )
-                mm = r4.scalar_one_or_none()
-                if mm:
-                    await s.delete(mm)
+            await s.delete(m)
 
         await s.delete(u)
         await s.commit()
@@ -348,9 +367,13 @@ async def get_family(fid: int) -> Family | None:
 
 
 async def get_user_family(uid: int):
+    """Возвращает первую найденную семью пользователя. Не падает при дублях."""
     async with Session() as s:
-        r = await s.execute(select(FamilyMember).where(FamilyMember.user_id == uid))
-        m = r.scalar_one_or_none()
+        r = await s.execute(
+            select(FamilyMember).where(FamilyMember.user_id == uid)
+            .order_by(FamilyMember.id.asc())
+        )
+        m = r.scalars().first()
         if not m:
             return None
         f = await s.get(Family, m.family_id)
@@ -359,6 +382,14 @@ async def get_user_family(uid: int):
 
 async def add_family_member(family_id: int, user_id: int, role: str = "member"):
     async with Session() as s:
+        # защита от дублей
+        r = await s.execute(select(FamilyMember).where(
+            and_(FamilyMember.family_id == family_id,
+                 FamilyMember.user_id == user_id)
+        ))
+        existing = r.scalars().first()
+        if existing:
+            return
         s.add(FamilyMember(family_id=family_id, user_id=user_id, role=role))
         await s.commit()
 
@@ -417,7 +448,7 @@ async def get_member_role(family_id: int, user_id: int):
             and_(FamilyMember.family_id == family_id,
                  FamilyMember.user_id == user_id)
         ))
-        m = r.scalar_one_or_none()
+        m = r.scalars().first()
         return m.role if m else None
 
 
@@ -429,7 +460,7 @@ async def set_member_role(family_id: int, user_id: int, role: str) -> bool:
             and_(FamilyMember.family_id == family_id,
                  FamilyMember.user_id == user_id)
         ))
-        m = r.scalar_one_or_none()
+        m = r.scalars().first()
         if not m or m.role == "owner":
             return False
         m.role = role
@@ -468,13 +499,17 @@ async def get_elderly(eid: int) -> Elderly | None:
 async def get_elderly_by_code(code: str) -> Elderly | None:
     async with Session() as s:
         r = await s.execute(select(Elderly).where(Elderly.invite_code == code))
-        return r.scalar_one_or_none()
+        return r.scalars().first()
 
 
 async def get_elderly_by_user(uid: int) -> Elderly | None:
+    """Возвращает первого привязанного близкого. Не падает при дублях."""
     async with Session() as s:
-        r = await s.execute(select(Elderly).where(Elderly.user_id == uid))
-        return r.scalar_one_or_none()
+        r = await s.execute(
+            select(Elderly).where(Elderly.user_id == uid)
+            .order_by(Elderly.id.asc())
+        )
+        return r.scalars().first()
 
 
 async def list_family_elderly(family_id: int) -> list[Elderly]:
@@ -871,7 +906,7 @@ async def get_alert_ack(elderly_id: int, user_id: int, kind: str):
                  AlertAck.user_id == user_id,
                  AlertAck.kind == kind)
         ).order_by(AlertAck.created_at.desc()).limit(1))
-        return r.scalar_one_or_none()
+        return r.scalars().first()
 
 
 async def who_acknowledged(elderly_id: int, kind: str):
@@ -911,7 +946,7 @@ async def is_user_muted(user_id: int) -> bool:
             and_(UserMute.user_id == user_id,
                  UserMute.until_at > datetime.utcnow())
         ).order_by(UserMute.until_at.desc()).limit(1))
-        return r.scalar_one_or_none() is not None
+        return r.scalars().first() is not None
 
 
 async def get_mute_until(user_id: int):
@@ -920,7 +955,7 @@ async def get_mute_until(user_id: int):
             and_(UserMute.user_id == user_id,
                  UserMute.until_at > datetime.utcnow())
         ).order_by(UserMute.until_at.desc()).limit(1))
-        m = r.scalar_one_or_none()
+        m = r.scalars().first()
         return m.until_at if m else None
 
 
@@ -1018,117 +1053,3 @@ async def admin_stats() -> dict:
             "help_total": len(help_all),
             "help_new": len(help_new),
         }
-        
-        # ============================================================
-# ANALYTICS
-# ============================================================
-
-async def weekly_progress(elderly_id: int, days: int = 7):
-    """Возвращает список дней с разбивкой выполненных/пропущенных задач."""
-    end = datetime.utcnow()
-    start = end - timedelta(days=days)
-    async with Session() as s:
-        r = await s.execute(select(Event).where(
-            and_(Event.elderly_id == elderly_id,
-                 Event.kind == "routine",
-                 Event.created_at >= start,
-                 Event.created_at <= end)
-        ).order_by(Event.created_at))
-        events = list(r.scalars().all())
-
-    by_day = {}
-    for e in events:
-        key = e.created_at.strftime("%Y-%m-%d")
-        if key not in by_day:
-            by_day[key] = {"done": 0, "skipped": 0, "alarm": 0, "pending": 0, "total": 0}
-        by_day[key]["total"] = by_day[key]["total"] + 1
-        if e.status in by_day[key]:
-            by_day[key][e.status] = by_day[key][e.status] + 1
-
-    result = []
-    for i in range(days):
-        d = (end - timedelta(days=days - 1 - i)).date()
-        key = d.isoformat()
-        stats = by_day.get(key, {"done": 0, "skipped": 0, "alarm": 0,
-                                 "pending": 0, "total": 0})
-        stats["date"] = d
-        result.append(stats)
-    return result
-
-
-async def family_activity_log(family_id: int, elderly_ids: list,
-                              hours: int = 24, limit: int = 50):
-    """Лента событий за период. Возвращает список кортежей (time, text)."""
-    since = datetime.utcnow() - timedelta(hours=hours)
-    log_items = []
-
-    async with Session() as s:
-        if elderly_ids:
-            r = await s.execute(select(Event).where(
-                and_(Event.elderly_id.in_(elderly_ids),
-                     Event.created_at >= since)
-            ).order_by(Event.created_at))
-            for ev in r.scalars().all():
-                t = ev.created_at.strftime("%H:%M")
-                if ev.kind == "routine":
-                    if ev.status == "done":
-                        text = "✅ задача выполнена"
-                    elif ev.status == "skipped":
-                        text = "⏭ задача пропущена"
-                    elif ev.status == "alarm":
-                        text = "⚠️ задача не подтверждена"
-                    else:
-                        text = "⏳ задача ожидает"
-                    log_items.append((ev.created_at, t, text, ev.elderly_id))
-                elif ev.kind == "wellbeing":
-                    if ev.status in ("bad", "help", "critical"):
-                        log_items.append((ev.created_at, t,
-                                          "⚠️ самочувствие: " + ev.status,
-                                          ev.elderly_id))
-
-        r2 = await s.execute(select(WellbeingLog).where(
-            and_(WellbeingLog.elderly_id.in_(elderly_ids),
-                 WellbeingLog.created_at >= since)
-        ).order_by(WellbeingLog.created_at))
-        for lg in r2.scalars().all():
-            if lg.category in ("bad", "help", "critical"):
-                t = lg.created_at.strftime("%H:%M")
-                log_items.append((lg.created_at, t,
-                                  "💬 жалоба: " + lg.text[:40],
-                                  lg.elderly_id))
-
-        r3 = await s.execute(select(AlertAck).where(
-            and_(AlertAck.elderly_id.in_(elderly_ids),
-                 AlertAck.created_at >= since)
-        ).order_by(AlertAck.created_at))
-        for a in r3.scalars().all():
-            t = a.created_at.strftime("%H:%M")
-            log_items.append((a.created_at, t,
-                              "✅ взято на контроль", a.elderly_id))
-
-    log_items.sort(key=lambda x: x[0], reverse=True)
-    return log_items[:limit]
-
-
-async def get_elderly_names(elderly_ids: list) -> dict:
-    """Возвращает {id: name} для списка близких."""
-    if not elderly_ids:
-        return {}
-    async with Session() as s:
-        r = await s.execute(select(Elderly).where(Elderly.id.in_(elderly_ids)))
-        return {e.id: e.name for e in r.scalars().all()}
-        
-async def delete_elderly_everything(elderly_id: int):
-    """Полная очистка данных близкого: задачи, события, замеры, заметки, ack."""
-    from sqlalchemy import delete as sqldel
-    async with Session() as s:
-        await s.execute(sqldel(Routine).where(Routine.elderly_id == elderly_id))
-        await s.execute(sqldel(Event).where(Event.elderly_id == elderly_id))
-        await s.execute(sqldel(WellbeingLog).where(WellbeingLog.elderly_id == elderly_id))
-        await s.execute(sqldel(Measurement).where(Measurement.elderly_id == elderly_id))
-        await s.execute(sqldel(Note).where(Note.elderly_id == elderly_id))
-        await s.execute(sqldel(AlertAck).where(AlertAck.elderly_id == elderly_id))
-        e = await s.get(Elderly, elderly_id)
-        if e:
-            await s.delete(e)
-        await s.commit()
