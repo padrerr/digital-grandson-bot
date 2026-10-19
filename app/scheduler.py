@@ -504,19 +504,14 @@ async def restore_pending_events(bot: Bot):
                     id="rm_" + str(ev.id), replace_existing=True,
                 )
                 log.info("Restored routine_reminder for event %s", ev.id)
-            elif elapsed < settings.FAMILY_ALERT_AFTER_MIN:
+            else:
+                # Прошло больше REMINDER_AFTER_MIN, отправляем напоминание и тревогу сразу
                 scheduler.add_job(
                     routine_reminder, "date",
                     run_date=now + timedelta(seconds=5), args=[bot, ev.id],
                     id="rm_" + str(ev.id), replace_existing=True,
                 )
                 log.info("Immediate routine_reminder for event %s", ev.id)
-            else:
-                r_obj = await get_routine(ev.routine_id) if ev.routine_id else None
-                title = r_obj.title if r_obj else "задача"
-                await notify_task_alarm(bot, e, title)
-                await set_event_status(ev.id, "alarm")
-                log.info("Immediate alarm for event %s", ev.id)
 
         elif ev.kind == "wellbeing":
             elapsed = (now - ev.created_at).total_seconds() / 60.0

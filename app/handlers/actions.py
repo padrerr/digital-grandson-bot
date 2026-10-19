@@ -112,26 +112,23 @@ async def _safe_edit(cb: CallbackQuery, text: str, remove_markup: bool = True):
     except Exception as ex:
         err = str(ex).lower()
         if "message is not modified" in err:
-            # текст такой же — это не ошибка
             pass
         elif "message to edit not found" in err or "message can't be edited" in err:
-            # сообщение старое/удалено — пробуем отправить новое
-            try:
-                await cb.message.answer(text)
-            except Exception:
-                pass
+            await cb.answer(
+                "Сообщение устарело. Откройте меню заново.",
+                show_alert=True,
+            )
         else:
             log.warning("safe_edit edit_text failed: %s", ex)
-            try:
-                await cb.message.answer(text)
-            except Exception:
-                pass
+            await cb.answer(
+                "Не удалось обновить сообщение. Попробуйте ещё раз.",
+                show_alert=True,
+            )
         return
     if remove_markup:
         try:
             await cb.message.edit_reply_markup(reply_markup=None)
         except Exception as ex:
-            # не критично, клавиатура могла уже исчезнуть
             err = str(ex).lower()
             if "message is not modified" not in err and "not found" not in err:
                 log.debug("safe_edit edit_reply_markup failed: %s", ex)
@@ -376,8 +373,9 @@ async def routine_button(cb: CallbackQuery, state: FSMContext):
         await cb.answer("Задача уже неактуальна", show_alert=True)
         return
 
-    if ev.status != "pending":
-        await cb.answer("Уже обработано", show_alert=True)
+    # ВАЖНО: разрешаем выполнение, даже если статус "alarm" (было напоминание)
+    if ev.status not in ("pending", "alarm"):
+        await cb.answer("Задача уже обработана", show_alert=True)
         return
 
     r = await get_routine(ev.routine_id) if ev.routine_id else None
