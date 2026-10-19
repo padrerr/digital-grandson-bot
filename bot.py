@@ -5,8 +5,8 @@ import traceback
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.sqlite import SQLiteStorage
 from aiogram.types import ErrorEvent
+from aiogram_sqlite_storage.sqlitestore import SQLStorage
 
 from app.config import settings
 from app.db import init_db
@@ -44,7 +44,7 @@ async def main():
         default=DefaultBotProperties(parse_mode="HTML"),
     )
 
-    storage = SQLiteStorage(path="data/fsm.db")
+    storage = SQLStorage("data/fsm.db")
     dp = Dispatcher(storage=storage)
 
     dp.message.middleware(ClearStateOnSystemButton())
