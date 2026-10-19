@@ -42,7 +42,6 @@ REPLY_TEXTS = {
     "critical": "Пожалуйста, срочно позвоните 112 или 103!",
 }
 
-# Симптомы: (label, сообщение близкому, сообщение семье, критично)
 PROBLEMS = {
     "head": {
         "label": "болит голова",
@@ -102,6 +101,42 @@ MORNING_WISHES = [
 ]
 
 
+async def _safe_edit(cb: CallbackQuery, text: str, remove_markup: bool = True):
+    """
+    Безопасно редактирует сообщение.
+    Не падает, если сообщение уже неактуально, удалено или
+    Telegram считает, что «ничего не изменилось».
+    """
+    try:
+        await cb.message.edit_text(text)
+    except Exception as ex:
+        err = str(ex).lower()
+        if "message is not modified" in err:
+            # текст такой же — это не ошибка
+            pass
+        elif "message to edit not found" in err or "message can't be edited" in err:
+            # сообщение старое/удалено — пробуем отправить новое
+            try:
+                await cb.message.answer(text)
+            except Exception:
+                pass
+        else:
+            log.warning("safe_edit edit_text failed: %s", ex)
+            try:
+                await cb.message.answer(text)
+            except Exception:
+                pass
+        return
+    if remove_markup:
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception as ex:
+            # не критично, клавиатура могла уже исчезнуть
+            err = str(ex).lower()
+            if "message is not modified" not in err and "not found" not in err:
+                log.debug("safe_edit edit_reply_markup failed: %s", ex)
+
+
 async def apply_wellbeing_level(bot: Bot, elderly, level: str,
                                 reply_fn, source: str = "button",
                                 log_text: str = ""):
@@ -112,7 +147,7 @@ async def apply_wellbeing_level(bot: Bot, elderly, level: str,
                 Event.kind == "wellbeing",
             ).order_by(desc(Event.created_at)).limit(1)
         )
-        ev = r.scalar_one_or_none()
+        ev = r.scalars().first()
         if ev:
             ev.status = level
             await s.commit()
@@ -134,8 +169,8 @@ async def woke_up_msg(msg: Message):
     await set_wake(e.id)
     greeting = ("Доброе утро, " + e.name + "! ") if e.name else "Доброе утро! "
     wish = random.choice(MORNING_WISHES)
-    text = greeting + wish + "\n\nРасписание на сегодня готово. " \
-        "Нажмите «📋 Мои задачи», чтобы посмотреть."
+    text = (greeting + wish + "\n\nРасписание на сегодня готово. "
+            "Нажмите «📋 Мои задачи», чтобы посмотреть.")
     await msg.answer(text, reply_markup=kb_elderly_menu())
     await schedule_day_for_elderly(msg.bot, e.id)
     for u, _ in await list_family_members(e.family_id):
@@ -157,7 +192,7 @@ async def woke_up_cb(cb: CallbackQuery):
         return
     await set_wake(e.id)
     wish = random.choice(MORNING_WISHES)
-    await cb.message.edit_text("Доброе утро! " + wish)
+    await _safe_edit(cb, "Доброе утро! " + wish, remove_markup=False)
     await cb.answer()
     await schedule_day_for_elderly(cb.bot, e.id)
 
@@ -188,10 +223,6 @@ async def my_tasks(msg: Message):
     await msg.answer(text)
 
 
-# ============================================================
-# САМОЧУВСТВИЕ
-# ============================================================
-
 @router.message(F.text == "😊 Как я себя чувствую")
 async def ask_wellbeing(msg: Message):
     await msg.answer("Как вы себя чувствуете?",
@@ -215,16 +246,12 @@ async def wellbeing_button(cb: CallbackQuery):
         return
 
     async def edit_fn(text):
-        await cb.message.edit_text(text)
+        await _safe_edit(cb, text, remove_markup=True)
 
     await apply_wellbeing_level(cb.bot, e, level, edit_fn,
                                 source="button", log_text="кнопка: " + level)
     await cb.answer()
 
-
-# ============================================================
-# СООБЩИТЬ О ПРОБЛЕМЕ
-# ============================================================
 
 @router.message(F.text == "🩺 Сообщить о проблеме")
 async def problem_start(msg: Message):
@@ -235,7 +262,6 @@ async def problem_start(msg: Message):
 
 
 async def _notify_family_problem(bot: Bot, e, text: str, urgent: bool):
-    """Отправляет сообщение всем родственникам. При urgent — игнор тихих часов."""
     if not urgent and is_quiet_hours(e, datetime.now()):
         return
     for u, _ in await list_family_members(e.family_id):
@@ -248,7 +274,7 @@ async def _notify_family_problem(bot: Bot, e, text: str, urgent: bool):
 @router.callback_query(F.data == "prob:cancel")
 async def problem_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("Хорошо, отменил.")
+    await _safe_edit(cb, "Хорошо, отменил.")
     await cb.answer()
 
 
@@ -266,9 +292,10 @@ async def problem_choice(cb: CallbackQuery, state: FSMContext):
 
     if code == "other":
         await state.set_state(ProblemOther.waiting_text)
-        await cb.message.edit_text(
+        await _safe_edit(
+            cb,
             "Опишите, что вас беспокоит, одним сообщением.\n\n"
-            "Чтобы отменить — отправьте /cancel"
+            "Чтобы отменить — отправьте /cancel",
         )
         await cb.answer()
         return
@@ -279,8 +306,7 @@ async def problem_choice(cb: CallbackQuery, state: FSMContext):
         return
 
     await log_wellbeing(e.id, "жалоба: " + info["label"], "bad", source="button")
-    await cb.message.edit_text(info["reply"])
-    await cb.message.edit_reply_markup(reply_markup=None)
+    await _safe_edit(cb, info["reply"])
     await cb.answer("Передали близким")
 
     from app.services.notify import notify_problem
@@ -319,10 +345,6 @@ async def problem_other_cancel(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer("Отменено.", reply_markup=kb_elderly_menu())
 
-
-# ============================================================
-# ЗАДАЧИ
-# ============================================================
 
 async def _notify_call_request(bot: Bot, elderly_id: int):
     e = await get_elderly(elderly_id)
@@ -377,23 +399,26 @@ async def routine_button(cb: CallbackQuery, state: FSMContext):
                 "Например: " + example + "\n\n"
                 "Чтобы отменить — отправьте /cancel"
             )
-            await cb.message.edit_text(text)
-            await cb.message.edit_reply_markup(reply_markup=None)
+            await _safe_edit(cb, text)
         else:
             await set_event_status(ev.id, "done")
             if name:
                 reply = "Молодец, " + name + "! Записал: «" + title + "»"
             else:
                 reply = "Молодец! Записал: «" + title + "»"
-            await cb.message.edit_text(reply)
-            await cb.message.edit_reply_markup(reply_markup=None)
-            await notify_task_action(cb.bot, ev.elderly_id, title, "done")
+            await _safe_edit(cb, reply)
+            try:
+                await notify_task_action(cb.bot, ev.elderly_id, title, "done")
+            except Exception as ex:
+                log.warning("notify_task_action failed: %s", ex)
 
     elif action == "skip":
         await set_event_status(ev.id, "skipped")
-        await cb.message.edit_text("Записал, что «" + title + "» пропущено.")
-        await cb.message.edit_reply_markup(reply_markup=None)
-        await notify_task_action(cb.bot, ev.elderly_id, title, "skipped")
+        await _safe_edit(cb, "Записал, что «" + title + "» пропущено.")
+        try:
+            await notify_task_action(cb.bot, ev.elderly_id, title, "skipped")
+        except Exception as ex:
+            log.warning("notify_task_action failed: %s", ex)
 
     elif action == "later":
         await set_event_status(ev.id, "pending")
@@ -404,15 +429,11 @@ async def routine_button(cb: CallbackQuery, state: FSMContext):
             args=[cb.bot, ev.id],
             id="later_" + str(ev.id), replace_existing=True,
         )
-        await cb.message.edit_text("Хорошо, напомню через 20 минут.")
-        await cb.message.edit_reply_markup(reply_markup=None)
+        await _safe_edit(cb, "Хорошо, напомню через 20 минут.")
 
     elif action == "call":
         await _notify_call_request(cb.bot, ev.elderly_id)
-        await cb.message.edit_text(
-            "Передал близким, что вы хотите поговорить."
-        )
-        await cb.message.edit_reply_markup(reply_markup=None)
+        await _safe_edit(cb, "Передал близким, что вы хотите поговорить.")
 
     await cb.answer()
 
