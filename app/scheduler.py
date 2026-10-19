@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timedelta, date
 
 from aiogram import Bot
@@ -380,6 +381,25 @@ async def scheduled_backup(bot: Bot):
         log.warning("Backup failed")
 
 
+async def cleanup_tmp_files():
+    """Удаляет файлы из data/tmp и data/voice старше 1 часа."""
+    now = datetime.now().timestamp()
+    for folder in ("data/tmp", "data/voice"):
+        if not os.path.isdir(folder):
+            continue
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                mtime = os.path.getmtime(path)
+                if now - mtime > 3600:
+                    os.remove(path)
+                    log.info("Removed old tmp file: %s", path)
+            except Exception as ex:
+                log.warning("Cleanup failed for %s: %s", path, ex)
+
+
 async def scheduled_heartbeat():
     heartbeat()
 
@@ -582,6 +602,11 @@ async def bootstrap(bot: Bot):
         scheduled_backup, "cron",
         hour=3, minute=0,
         args=[bot], id="backup", replace_existing=True,
+    )
+    scheduler.add_job(
+        cleanup_tmp_files, "cron",
+        hour=4, minute=0,
+        id="cleanup_tmp", replace_existing=True,
     )
     scheduler.add_job(
         scheduled_heartbeat, "interval",

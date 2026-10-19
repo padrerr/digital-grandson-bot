@@ -77,7 +77,6 @@ def _routine_list_text(e, routines):
 
 
 async def _check_edit(cb: CallbackQuery, elderly_id: int) -> bool:
-    """Проверяет, что текущий пользователь — owner/moderator семьи."""
     user = await get_user_by_tg(cb.from_user.id)
     if not user:
         await cb.answer()
@@ -118,10 +117,6 @@ def _routine_to_item(r):
     }
 
 
-# ============================================================
-# ПАНЕЛЬ БЛИЗКОГО
-# ============================================================
-
 @router.callback_query(F.data.startswith("eld:"))
 async def elderly_panel(cb: CallbackQuery):
     try:
@@ -138,7 +133,6 @@ async def elderly_panel(cb: CallbackQuery):
         await cb.answer("Не найден", show_alert=True)
         return
     can_edit = await can_edit_family_data(e.family_id, user.id)
-    owner = (e.family_id is not None) and False  # заглушка
     from app.db import get_member_role
     role = await get_member_role(e.family_id, user.id)
     owner = (role == "owner")
@@ -214,21 +208,24 @@ async def delete_elderly(cb: CallbackQuery):
     if not e:
         await cb.answer("Не найден", show_alert=True)
         return
-    from app.db import get_member_role, delete_elderly_everything
+    from app.db import get_member_role
     if await get_member_role(e.family_id, user.id) != "owner":
         await cb.answer("Только владелец может удалять.", show_alert=True)
         return
-    family_id = e.family_id
-    await delete_elderly_everything(eid)
+    async with Session() as s:
+        await s.execute(sqldelete(Routine).where(Routine.elderly_id == eid))
+        await s.execute(sqldelete(Event).where(Event.elderly_id == eid))
+        await s.execute(sqldelete(WellbeingLog).where(WellbeingLog.elderly_id == eid))
+        await s.execute(sqldelete(Measurement).where(Measurement.elderly_id == eid))
+        ee = await s.get(Elderly, eid)
+        if ee:
+            await s.delete(ee)
+        await s.commit()
     await cb.answer("Удалён", show_alert=True)
-    elderly = await list_family_elderly(family_id)
+    elderly = await list_family_elderly(e.family_id)
     text = "❤️ Близкие под нашей заботой\n\nВсего: " + str(len(elderly))
     await cb.message.edit_text(text, reply_markup=kb_elderly_panel(elderly))
 
-
-# ============================================================
-# ЧЕК-ИН
-# ============================================================
 
 @router.callback_query(F.data.startswith("checkin:"))
 async def checkin_edit(cb: CallbackQuery, state: FSMContext):
@@ -268,10 +265,6 @@ async def checkin_set(msg: Message, state: FSMContext):
     await msg.answer("Чек-ин установлен на " + str(h) + ":00",
                      reply_markup=kb_family_menu())
 
-
-# ============================================================
-# ТИХИЕ ЧАСЫ
-# ============================================================
 
 @router.callback_query(F.data.startswith("quiet:"))
 async def quiet_panel(cb: CallbackQuery):
@@ -357,10 +350,6 @@ async def quiet_time_set(msg: Message, state: FSMContext):
     await msg.answer(text, reply_markup=kb_family_menu())
 
 
-# ============================================================
-# ДЕНЬ РОЖДЕНИЯ
-# ============================================================
-
 @router.callback_query(F.data.startswith("bday:"))
 async def birthday_panel(cb: CallbackQuery):
     try:
@@ -432,10 +421,6 @@ async def birthday_clear(cb: CallbackQuery):
     await birthday_panel(cb)
 
 
-# ============================================================
-# ЭКСПОРТ CSV
-# ============================================================
-
 @router.callback_query(F.data.startswith("csv:"))
 async def csv_export(cb: CallbackQuery):
     try:
@@ -465,10 +450,6 @@ async def csv_export(cb: CallbackQuery):
     finally:
         cleanup(tmp_path)
 
-
-# ============================================================
-# РАСПОРЯДОК
-# ============================================================
 
 @router.callback_query(F.data.startswith("rt_menu:"))
 async def rt_menu(cb: CallbackQuery):
@@ -727,6 +708,9 @@ async def rt_rename_done(msg: Message, state: FSMContext):
     if not txt:
         await msg.answer("Пожалуйста, напишите текстом.")
         return
+    if len(txt) > 100:
+        await msg.answer("Название задачи слишком длинное (максимум 100 символов).")
+        return
     data = await state.get_data()
     rid = data.get("rt_rid")
     r = await get_routine(rid)
@@ -800,10 +784,6 @@ async def rt_retime_done(msg: Message, state: FSMContext):
     await msg.answer(_routine_list_text(e, routines),
                      reply_markup=kb_routine_menu(eid, routines))
 
-
-# ============================================================
-# ШАБЛОНЫ
-# ============================================================
 
 @router.callback_query(F.data == "tpl_choose")
 async def tpl_choose(cb: CallbackQuery):

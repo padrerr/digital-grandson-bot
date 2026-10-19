@@ -228,6 +228,9 @@ async def reg_name(msg: Message, state: FSMContext):
     if not txt:
         await msg.answer("Пожалуйста, напишите текстом.")
         return
+    if len(txt) > 100:
+        await msg.answer("Имя слишком длинное (максимум 100 символов).")
+        return
     from app.db import Session, User
     user = await get_user_by_tg(msg.from_user.id)
     if not user:
@@ -247,6 +250,9 @@ async def reg_family(msg: Message, state: FSMContext):
     txt = (msg.text or "").strip()
     if not txt:
         await msg.answer("Пожалуйста, напишите текстом.")
+        return
+    if len(txt) > 100:
+        await msg.answer("Название семьи слишком длинное (максимум 100 символов).")
         return
     user = await get_user_by_tg(msg.from_user.id)
     if not user:
