@@ -303,7 +303,7 @@ async def admin_backups(cb: CallbackQuery):
     hb = last_heartbeat()
     lines = ["💾 <b>Бэкапы базы</b>", ""]
     if hb:
-        delta = datetime.utcnow() - hb
+        delta = datetime.now() - hb
         mins = int(delta.total_seconds() / 60)
         lines.append("Heartbeat: " + str(mins) + " мин назад")
     else:

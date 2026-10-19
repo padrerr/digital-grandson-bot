@@ -191,7 +191,7 @@ async def report_view(cb: CallbackQuery):
         await cb.answer("Не найден", show_alert=True)
         return
 
-    end = datetime.utcnow()
+    end = datetime.now()
     start = end - timedelta(days=7)
     events = await events_between(e.id, start, end)
     routine_events = [x for x in events if x.kind == "routine"]

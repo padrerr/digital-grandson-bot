@@ -5,7 +5,7 @@ import traceback
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.sqlite import SQLiteStorage
 from aiogram.types import ErrorEvent
 
 from app.config import settings
@@ -19,7 +19,6 @@ log = logging.getLogger(__name__)
 
 
 async def on_error(event: ErrorEvent):
-    """Глобальный обработчик ошибок — логирует всё и отвечает пользователю."""
     log.error("Update error: %s", event.exception)
     log.error(traceback.format_exc())
     try:
@@ -44,11 +43,12 @@ async def main():
         token=settings.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode="HTML"),
     )
-    dp = Dispatcher(storage=MemoryStorage())
+
+    storage = SQLiteStorage(path="data/fsm.db")
+    dp = Dispatcher(storage=storage)
 
     dp.message.middleware(ClearStateOnSystemButton())
     dp.callback_query.middleware(ClearStateOnSystemButton())
-
     dp.errors.register(on_error)
 
     dp.include_router(setup_routers())

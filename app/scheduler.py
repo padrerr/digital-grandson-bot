@@ -3,11 +3,11 @@ from datetime import datetime, timedelta, date
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 from app.config import settings
 from app.db import (
-    Session, User, Elderly,
+    Session, User, Elderly, Event,
     get_elderly, get_routines, get_user, get_event, get_routine,
     create_event, set_event_status, list_family_members, clear_wake,
     events_between, is_quiet_hours, list_elderly_with_birthday,
@@ -128,7 +128,6 @@ async def routine_reminder(bot: Bot, event_id: int):
                 )
             except Exception:
                 pass
-    # тревога родственникам с кнопками реакций
     await notify_task_alarm(bot, e, title)
     await set_event_status(event_id, "alarm")
 
@@ -286,27 +285,6 @@ async def schedule_absolute_routines(bot: Bot):
                 )
 
 
-async def daily_rollover(bot: Bot):
-    async with Session() as s:
-        elderlies = (await s.execute(
-            select(Elderly).where(Elderly.active == True)
-        )).scalars().all()
-    for e in elderlies:
-        await clear_wake(e.id)
-        scheduler.add_job(
-            send_wake_prompt, "cron",
-            hour=7, minute=0,
-            args=[bot, e.id],
-            id="wake_" + str(e.id), replace_existing=True,
-        )
-        scheduler.add_job(
-            wake_timeout, "cron",
-            hour=e.checkin_hour, minute=0,
-            args=[bot, e.id],
-            id="wake_to_" + str(e.id), replace_existing=True,
-        )
-
-
 async def birthday_check(bot: Bot):
     today = datetime.now()
     tomorrow = today + timedelta(days=1)
@@ -315,7 +293,8 @@ async def birthday_check(bot: Bot):
         elderlies = await list_elderly_with_birthday(mm_dd)
         for e in elderlies:
             for u, _ in await list_family_members(e.family_id):
-                text = ("🎂 Напоминание: у " + e.name + " " + label + " день рождения!")
+                text = ("🎂 Напоминание: у " + e.name + " " + label
+                        + " день рождения!")
                 try:
                     await bot.send_message(u.tg_id, text)
                 except Exception:
@@ -405,9 +384,140 @@ async def scheduled_heartbeat():
     heartbeat()
 
 
+# ============================================================
+# ВОССТАНОВЛЕНИЕ ЗАДАЧ ПОСЛЕ ПЕРЕЗАПУСКА
+# ============================================================
+
+async def _register_daily_jobs(bot: Bot, e: Elderly):
+    """Регистрирует ежедневные cron-задачи для близкого (без сброса wake)."""
+    scheduler.add_job(
+        send_wake_prompt, "cron",
+        hour=7, minute=0,
+        args=[bot, e.id],
+        id="wake_" + str(e.id), replace_existing=True,
+    )
+    scheduler.add_job(
+        wake_timeout, "cron",
+        hour=e.checkin_hour, minute=0,
+        args=[bot, e.id],
+        id="wake_to_" + str(e.id), replace_existing=True,
+    )
+
+
+async def _has_event_today(elderly_id, routine_id, kind="routine"):
+    """Проверяет, было ли событие на сегодня для данной задачи."""
+    today_start = datetime.combine(date.today(), datetime.min.time())
+    today_end = today_start + timedelta(days=1)
+    async with Session() as s:
+        q = select(Event).where(
+            and_(Event.elderly_id == elderly_id,
+                 Event.kind == kind,
+                 Event.created_at >= today_start,
+                 Event.created_at < today_end)
+        )
+        if routine_id is not None:
+            q = q.where(Event.routine_id == routine_id)
+        r = await s.execute(q)
+        return r.scalars().first() is not None
+
+
+async def restore_today_tasks(bot: Bot):
+    """
+    Восстанавливает wake_offset задачи для тех, кто уже проснулся сегодня.
+    Пропускает уже прошедшие и уже отправленные (чтобы не дублировать).
+    """
+    today = date.today().isoformat()
+    async with Session() as s:
+        elderlies = (await s.execute(
+            select(Elderly).where(
+                Elderly.active == True,
+                Elderly.wake_date == today,
+                Elderly.wake_at.isnot(None)
+            )
+        )).scalars().all()
+
+    now = datetime.now()
+    for e in elderlies:
+        base = e.wake_at
+        routines = await get_routines(e.id)
+        for r in routines:
+            if r.mode == "wake_offset":
+                when = base + timedelta(minutes=r.offset_min)
+                if when <= now:
+                    continue
+                if await _has_event_today(e.id, r.id, "routine"):
+                    continue
+                scheduler.add_job(
+                    send_routine, "date",
+                    run_date=when,
+                    args=[bot, r.id],
+                    id="day_" + str(e.id) + "_" + str(r.id),
+                    replace_existing=True,
+                )
+                log.info("Restored routine %s for elderly %s at %s",
+                         r.id, e.id, when)
+
+        wb_time = base + timedelta(hours=settings.WELLBEING_AFTER_HOURS)
+        if wb_time > now and not await _has_event_today(e.id, None, "wellbeing"):
+            scheduler.add_job(
+                send_wellbeing, "date",
+                run_date=wb_time,
+                args=[bot, e.id],
+                id="wb_" + str(e.id), replace_existing=True,
+            )
+            log.info("Restored wellbeing for elderly %s at %s", e.id, wb_time)
+
+
+async def daily_rollover(bot: Bot):
+    """
+    Сбрасывает wake и регистрирует job'ы на новый день.
+    Запускается ТОЛЬКО cron'ом в 00:05, не при старте.
+    """
+    async with Session() as s:
+        elderlies = (await s.execute(
+            select(Elderly).where(Elderly.active == True)
+        )).scalars().all()
+    for e in elderlies:
+        await clear_wake(e.id)
+        await _register_daily_jobs(bot, e)
+    log.info("Daily rollover done for %s elderly", len(elderlies))
+
+
 async def bootstrap(bot: Bot):
-    await daily_rollover(bot)
+    """При старте бота — регистрация и восстановление задач (без сброса wake)."""
+    async with Session() as s:
+        elderlies = (await s.execute(
+            select(Elderly).where(Elderly.active == True)
+        )).scalars().all()
+
+    # 1. Дневные cron-задачи для всех близких
+    for e in elderlies:
+        await _register_daily_jobs(bot, e)
+
+    # 2. Если у кого-то не отмечено пробуждение и время ещё до чек-ина — напомнить
+    now = datetime.now()
+    for e in elderlies:
+        if not e.user_id:
+            continue
+        if e.wake_date == date.today().isoformat():
+            continue
+        if now.hour >= e.checkin_hour or now.hour < 7:
+            continue
+        try:
+            await send_wake_prompt(bot, e.id)
+        except Exception as ex:
+            log.warning("bootstrap wake prompt failed: %s", ex)
+
+    # 3. Absolute задачи
     await schedule_absolute_routines(bot)
+
+    # 4. Восстановить wake_offset задачи для тех, кто уже проснулся
+    await restore_today_tasks(bot)
+
+    # 5. Восстановить заметки
+    await reschedule_all_notes(bot)
+
+    # 6. Cron'ы
     scheduler.add_job(
         evening_report, "cron",
         hour=settings.EVENING_REPORT_HOUR,
@@ -428,7 +538,6 @@ async def bootstrap(bot: Bot):
         minute=settings.BIRTHDAY_MINUTE,
         args=[bot], id="birthday_check", replace_existing=True,
     )
-    await reschedule_all_notes(bot)
     scheduler.add_job(
         scheduled_backup, "cron",
         hour=3, minute=0,
@@ -436,7 +545,6 @@ async def bootstrap(bot: Bot):
     )
     scheduler.add_job(
         scheduled_heartbeat, "interval",
-        minutes=5,
-        id="heartbeat", replace_existing=True,
+        minutes=5, id="heartbeat", replace_existing=True,
     )
     heartbeat()

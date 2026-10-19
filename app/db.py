@@ -272,7 +272,7 @@ async def get_user(uid: int) -> User | None:
 async def create_user(tg_id: int, name: str) -> User:
     async with Session() as s:
         u = User(tg_id=tg_id, name=name, consent=True,
-                 consent_at=datetime.utcnow(),
+                 consent_at=datetime.now(),
                  is_admin=(tg_id in settings.admin_ids))
         s.add(u)
         await s.commit()
@@ -868,7 +868,7 @@ async def reply_help_request(rid: int, reply_text: str):
         if hr:
             hr.reply_text = reply_text
             hr.status = "replied"
-            hr.replied_at = datetime.utcnow()
+            hr.replied_at = datetime.now()
             await s.commit()
 
 
@@ -911,7 +911,7 @@ async def get_alert_ack(elderly_id: int, user_id: int, kind: str):
 
 async def who_acknowledged(elderly_id: int, kind: str):
     async with Session() as s:
-        cutoff = datetime.utcnow() - timedelta(hours=2)
+        cutoff = datetime.now() - timedelta(hours=2)
         r = await s.execute(select(AlertAck).where(
             and_(AlertAck.elderly_id == elderly_id,
                  AlertAck.kind == kind,
@@ -926,7 +926,7 @@ async def who_acknowledged(elderly_id: int, kind: str):
 
 async def mute_user(user_id: int, minutes: int):
     async with Session() as s:
-        until = datetime.utcnow() + timedelta(minutes=minutes)
+        until = datetime.now() + timedelta(minutes=minutes)
         m = UserMute(user_id=user_id, until_at=until)
         s.add(m)
         await s.commit()
@@ -944,7 +944,7 @@ async def is_user_muted(user_id: int) -> bool:
     async with Session() as s:
         r = await s.execute(select(UserMute).where(
             and_(UserMute.user_id == user_id,
-                 UserMute.until_at > datetime.utcnow())
+                 UserMute.until_at > datetime.now())
         ).order_by(UserMute.until_at.desc()).limit(1))
         return r.scalars().first() is not None
 
@@ -953,7 +953,7 @@ async def get_mute_until(user_id: int):
     async with Session() as s:
         r = await s.execute(select(UserMute).where(
             and_(UserMute.user_id == user_id,
-                 UserMute.until_at > datetime.utcnow())
+                 UserMute.until_at > datetime.now())
         ).order_by(UserMute.until_at.desc()).limit(1))
         m = r.scalars().first()
         return m.until_at if m else None
@@ -993,7 +993,7 @@ async def list_future_notes() -> list[Note]:
     async with Session() as s:
         r = await s.execute(select(Note).where(
             and_(Note.status == "pending",
-                 Note.remind_at > datetime.utcnow())
+                 Note.remind_at > datetime.now())
         ).order_by(Note.remind_at))
         return list(r.scalars().all())
 
@@ -1061,7 +1061,7 @@ async def admin_stats() -> dict:
 
 async def weekly_progress(elderly_id: int, days: int = 7):
     """Возвращает список дней с разбивкой выполненных/пропущенных задач."""
-    end = datetime.utcnow()
+    end = datetime.now()
     start = end - timedelta(days=days)
     async with Session() as s:
         r = await s.execute(select(Event).where(
@@ -1096,7 +1096,7 @@ async def weekly_progress(elderly_id: int, days: int = 7):
 async def family_activity_log(family_id: int, elderly_ids: list,
                               hours: int = 24, limit: int = 50):
     """Лента событий за период. Возвращает список кортежей (time, text)."""
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=hours)
     log_items = []
 
     if not elderly_ids:
