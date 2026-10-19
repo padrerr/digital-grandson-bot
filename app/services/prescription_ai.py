@@ -31,6 +31,7 @@ PROMPT = (
     "«после еды» — через 15 мин; «во время еды» — вместе.\n"
     "   - Если сказано «2 раза в день» — ДВЕ задачи: утром и вечером.\n"
     "   - Если «3 раза в день» — ТРИ задачи: утро, день, вечер.\n\n"
+
     "2. Замеры здоровья (только если упомянуты):\n"
     "   - «Контроль АД» / «артериального давления» → measure_kind = pressure.\n"
     "   - «Контроль сахара» / «глюкозы» → measure_kind = sugar.\n"
@@ -280,12 +281,22 @@ def _call_ultra_sync(prompt):
         response = client.chat.completions.create(
             model="GigaChat-3-Ultra",
             messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
         )
         if response.choices:
             return (response.choices[0].message.content or "").strip()
         return None
     except Exception as e:
-        log.warning("Ultra text call failed: %s", e)
+        log.warning("Ultra text call failed (with json format): %s", e)
+        try:
+            response = client.chat.completions.create(
+                model="GigaChat-3-Ultra",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            if response.choices:
+                return (response.choices[0].message.content or "").strip()
+        except Exception as e2:
+            log.warning("Ultra text call fallback failed: %s", e2)
         return None
 
 

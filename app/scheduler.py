@@ -384,12 +384,7 @@ async def scheduled_heartbeat():
     heartbeat()
 
 
-# ============================================================
-# ВОССТАНОВЛЕНИЕ ЗАДАЧ ПОСЛЕ ПЕРЕЗАПУСКА
-# ============================================================
-
 async def _register_daily_jobs(bot: Bot, e: Elderly):
-    """Регистрирует ежедневные cron-задачи для близкого (без сброса wake)."""
     scheduler.add_job(
         send_wake_prompt, "cron",
         hour=7, minute=0,
@@ -405,7 +400,6 @@ async def _register_daily_jobs(bot: Bot, e: Elderly):
 
 
 async def _has_event_today(elderly_id, routine_id, kind="routine"):
-    """Проверяет, было ли событие на сегодня для данной задачи."""
     today_start = datetime.combine(date.today(), datetime.min.time())
     today_end = today_start + timedelta(days=1)
     async with Session() as s:
@@ -422,10 +416,6 @@ async def _has_event_today(elderly_id, routine_id, kind="routine"):
 
 
 async def restore_today_tasks(bot: Bot):
-    """
-    Восстанавливает wake_offset задачи для тех, кто уже проснулся сегодня.
-    Пропускает уже прошедшие и уже отправленные (чтобы не дублировать).
-    """
     today = date.today().isoformat()
     async with Session() as s:
         elderlies = (await s.execute(
@@ -468,11 +458,69 @@ async def restore_today_tasks(bot: Bot):
             log.info("Restored wellbeing for elderly %s at %s", e.id, wb_time)
 
 
+async def restore_pending_events(bot: Bot):
+    now = datetime.now()
+    async with Session() as s:
+        cutoff = now - timedelta(hours=24)
+        r = await s.execute(
+            select(Event).where(
+                and_(Event.status == "pending", Event.created_at >= cutoff)
+            )
+        )
+        events = list(r.scalars().all())
+
+    for ev in events:
+        e = await get_elderly(ev.elderly_id)
+        if not e or not e.user_id:
+            continue
+
+        if ev.kind == "routine":
+            elapsed = (now - ev.created_at).total_seconds() / 60.0
+            if elapsed < settings.REMINDER_AFTER_MIN:
+                run_at = ev.created_at + timedelta(minutes=settings.REMINDER_AFTER_MIN)
+                scheduler.add_job(
+                    routine_reminder, "date",
+                    run_date=run_at, args=[bot, ev.id],
+                    id="rm_" + str(ev.id), replace_existing=True,
+                )
+                log.info("Restored routine_reminder for event %s", ev.id)
+            elif elapsed < settings.FAMILY_ALERT_AFTER_MIN:
+                scheduler.add_job(
+                    routine_reminder, "date",
+                    run_date=now + timedelta(seconds=5), args=[bot, ev.id],
+                    id="rm_" + str(ev.id), replace_existing=True,
+                )
+                log.info("Immediate routine_reminder for event %s", ev.id)
+            else:
+                r_obj = await get_routine(ev.routine_id) if ev.routine_id else None
+                title = r_obj.title if r_obj else "задача"
+                await notify_task_alarm(bot, e, title)
+                await set_event_status(ev.id, "alarm")
+                log.info("Immediate alarm for event %s", ev.id)
+
+        elif ev.kind == "wellbeing":
+            elapsed = (now - ev.created_at).total_seconds() / 60.0
+            if elapsed < settings.WELLBEING_REMINDER_MIN:
+                run_at = ev.created_at + timedelta(minutes=settings.WELLBEING_REMINDER_MIN)
+                scheduler.add_job(
+                    wellbeing_reminder, "date",
+                    run_date=run_at, args=[bot, ev.id],
+                    id="wb_rm_" + str(ev.id), replace_existing=True,
+                )
+                log.info("Restored wellbeing_reminder for event %s", ev.id)
+            elif elapsed < settings.WELLBEING_ALERT_MIN:
+                scheduler.add_job(
+                    wellbeing_reminder, "date",
+                    run_date=now + timedelta(seconds=5), args=[bot, ev.id],
+                    id="wb_rm_" + str(ev.id), replace_existing=True,
+                )
+                log.info("Immediate wellbeing_reminder for event %s", ev.id)
+            else:
+                await wellbeing_alarm(bot, ev.id)
+                log.info("Immediate wellbeing_alarm for event %s", ev.id)
+
+
 async def daily_rollover(bot: Bot):
-    """
-    Сбрасывает wake и регистрирует job'ы на новый день.
-    Запускается ТОЛЬКО cron'ом в 00:05, не при старте.
-    """
     async with Session() as s:
         elderlies = (await s.execute(
             select(Elderly).where(Elderly.active == True)
@@ -484,17 +532,14 @@ async def daily_rollover(bot: Bot):
 
 
 async def bootstrap(bot: Bot):
-    """При старте бота — регистрация и восстановление задач (без сброса wake)."""
     async with Session() as s:
         elderlies = (await s.execute(
             select(Elderly).where(Elderly.active == True)
         )).scalars().all()
 
-    # 1. Дневные cron-задачи для всех близких
     for e in elderlies:
         await _register_daily_jobs(bot, e)
 
-    # 2. Если у кого-то не отмечено пробуждение и время ещё до чек-ина — напомнить
     now = datetime.now()
     for e in elderlies:
         if not e.user_id:
@@ -508,16 +553,11 @@ async def bootstrap(bot: Bot):
         except Exception as ex:
             log.warning("bootstrap wake prompt failed: %s", ex)
 
-    # 3. Absolute задачи
     await schedule_absolute_routines(bot)
-
-    # 4. Восстановить wake_offset задачи для тех, кто уже проснулся
     await restore_today_tasks(bot)
-
-    # 5. Восстановить заметки
+    await restore_pending_events(bot)
     await reschedule_all_notes(bot)
 
-    # 6. Cron'ы
     scheduler.add_job(
         evening_report, "cron",
         hour=settings.EVENING_REPORT_HOUR,

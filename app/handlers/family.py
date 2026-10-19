@@ -287,6 +287,9 @@ async def add_elderly_finish(msg: Message, state: FSMContext):
     if not txt:
         await msg.answer("Пожалуйста, напишите текстом.")
         return
+    if len(txt) > 100:
+        await msg.answer("Имя слишком длинное (максимум 100 символов). Попробуйте короче.")
+        return
     user = await get_user_by_tg(msg.from_user.id)
     if not user:
         await state.clear()

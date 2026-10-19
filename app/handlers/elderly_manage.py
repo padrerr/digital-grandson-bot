@@ -586,6 +586,9 @@ async def rt_add_title(msg: Message, state: FSMContext):
         else:
             await msg.answer("Пожалуйста, напишите текстом.")
             return
+    if len(txt) > 100:
+        await msg.answer("Название задачи слишком длинное (максимум 100 символов).")
+        return
     await state.update_data(rt_title=txt)
     await state.set_state(RoutineAdd.time)
     if kind:
