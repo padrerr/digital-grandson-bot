@@ -1,0 +1,20 @@
+[0;1;32m●[0m dobrosmena.service - Dobrosmena Telegram Bot
+     Loaded: loaded (]8;;file://box-976253/etc/systemd/system/dobrosmena.service/etc/systemd/system/dobrosmena.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Fri 2026-10-16 17:31:52 MSK; 1min 6s ago
+   Main PID: 40081 (python)
+      Tasks: 6 (limit: 606)
+     Memory: 169.7M (peak: 170.0M)
+        CPU: 5.418s
+     CGroup: /system.slice/dobrosmena.service
+             └─[0;38;5;245m40081 /root/digital-grandson-bot/.venv/bin/python /root/digital-grandson-bot/bot.py[0m
+
+Oct 16 17:32:58 box-976253 python[40081]:            ^^^^^^^^^^^^^^^
+Oct 16 17:32:58 box-976253 python[40081]:   File "/root/digital-grandson-bot/.venv/lib/python3.12/site-packages/aiogram/client/bot.py", line 488, in __call__
+Oct 16 17:32:58 box-976253 python[40081]:     return await self.session(self, method, timeout=request_timeout)
+Oct 16 17:32:58 box-976253 python[40081]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Oct 16 17:32:58 box-976253 python[40081]:   File "/root/digital-grandson-bot/.venv/lib/python3.12/site-packages/aiogram/client/session/base.py", line 254, in __call__
+Oct 16 17:32:58 box-976253 python[40081]:     return cast(TelegramType, await middleware(bot, method))
+Oct 16 17:32:58 box-976253 python[40081]:                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Oct 16 17:32:58 box-976253 python[40081]:   File "/root/digital-grandson-bot/.venv/lib/python3.12/site-packages/aiogram/client/session/aiohttp.py", line 186, in make_request
+Oct 16 17:32:58 box-976253 python[40081]:     raise TelegramNetworkError(method=method, message="Request timeout error")
+Oct 16 17:32:58 box-976253 python[40081]: aiogram.exceptions.TelegramNetworkError: HTTP Client says - Request timeout error
